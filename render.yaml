@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: crown-arcade
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /healthz
+    envVars:
+      - key: TRUST_PROXY
+        value: "1"
+      - key: DATA_DIR
+        value: /tmp/crown-data
