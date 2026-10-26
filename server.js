@@ -106,6 +106,7 @@ function leaveQueues(id) {
   if (e) {
     const list = queues.get(e.key);
     if (list) { const i = list.indexOf(e); if (i >= 0) list.splice(i, 1); }
+    clearTimeout(e.timer);
     queued.delete(id);
   }
   const room = roomByHost.get(id);
@@ -126,12 +127,23 @@ function enqueue(s, game, stake) {
   }
   if (best) {
     list.splice(list.indexOf(best), 1);
+    clearTimeout(best.timer);
     queued.delete(best.id);
     createMatch(best.id, s.id, game, stake);
     return;
   }
   list.push(entry);
   queued.set(s.id, entry);
+  /* nobody to play? after 15-25 seconds a bot steps in (tunable for tests) */
+  const lo = Number(process.env.CA_QUEUE_BOT_MIN_MS || 15000), hi = Number(process.env.CA_QUEUE_BOT_MAX_MS || 25000);
+  entry.timer = setTimeout(() => {
+    if (queued.get(s.id) !== entry) return;
+    const sess = sessions.get(s.id);
+    leaveQueues(s.id);
+    if (sess && canPlay(s.id, stake)) createBotMatch(sess, game, stake);
+    else if (sess) sendWs(sess.ws, { t: 'cancelled' });
+  }, lo + Math.random() * Math.max(0, hi - lo));
+  if (entry.timer.unref) entry.timer.unref();
   sendWs(s.ws, { t: 'queued', game, stake });
 }
 

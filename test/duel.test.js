@@ -338,3 +338,37 @@ test('flooding the server gets the connection closed', async () => {
   await sleep(200);
   assert.equal(c.closeCode(), 1008);
 });
+
+test('a lone queued player is matched with a bot after the wait', async () => {
+  process.env.CA_QUEUE_BOT_MIN_MS = '150';
+  process.env.CA_QUEUE_BOT_MAX_MS = '250';
+  try {
+    const a = await player('Lonely');
+    a.send({ t: 'queue', game: 'orbit', stake: 25 });
+    await a.next('queued');
+    const m = await a.next('match');
+    assert.equal(m.bot, true);
+  } finally {
+    delete process.env.CA_QUEUE_BOT_MIN_MS;
+    delete process.env.CA_QUEUE_BOT_MAX_MS;
+  }
+});
+
+test('cancelling a queue stops the bot fallback', async () => {
+  process.env.CA_QUEUE_BOT_MIN_MS = '150';
+  process.env.CA_QUEUE_BOT_MAX_MS = '200';
+  try {
+    const a = await player('Canceller');
+    a.send({ t: 'queue', game: 'orbit', stake: 25 });
+    await a.next('queued');
+    a.send({ t: 'cancel' });
+    await a.next('cancelled');
+    await sleep(400);
+    a.send({ t: 'ladder' });
+    const l = await a.next('ladder');
+    assert.ok(l);
+  } finally {
+    delete process.env.CA_QUEUE_BOT_MIN_MS;
+    delete process.env.CA_QUEUE_BOT_MAX_MS;
+  }
+});

@@ -284,7 +284,7 @@ body{margin:0}
         <div class="stakes" id="stakes"></div>
         <p class="prize" id="prize"></p>
         <button class="cta" id="play" type="button">Play</button>
-        <div class="sec" style="margin-top:10px"><button class="ghost" id="btnBot" type="button">Practice vs bot</button><button class="ghost" id="btnFriend" type="button">Play a friend</button></div>
+        <div class="sec" style="margin-top:10px"><button class="ghost" id="btnBot" type="button">Practice solo</button><button class="ghost" id="btnFriend" type="button">Play a friend</button></div>
         <div class="joinrow" style="margin-top:10px"><input class="field" id="codeIn" placeholder="CODE" maxlength="4" autocomplete="off" spellcheck="false" aria-label="Friend room code"><button class="ghost" id="btnJoin" type="button">Join room</button></div>
         <p class="note" id="lobbyNote"></p>
       </section>
@@ -465,7 +465,7 @@ body{margin:0}
         send({t:'forfeit',mid:a.mid});
         toast('You left your last match, so it counted as a loss.');
       }
-    }else if(cur&&!cur.finished){
+    }else if(cur&&!cur.finished&&!cur.solo){
       /* the server has no record of the match we thought we were in */
       endLocalGame();cur=null;busy=false;show('lobby');
       toast('That match ended while you were offline.');
@@ -567,7 +567,7 @@ body{margin:0}
     var p=$('play'),bot=$('btnBot'),fr=$('btnFriend'),jn=$('btnJoin');
     if(!ready){
       p.textContent='Connecting...';p.disabled=true;p.dataset.mode='wait';
-      bot.disabled=true;fr.disabled=true;jn.disabled=true;
+      bot.disabled=false;fr.disabled=true;jn.disabled=true;
       $('prize').innerHTML='';
       $('lobbyNote').textContent='';
       return;
@@ -575,7 +575,7 @@ body{margin:0}
     jn.disabled=false;
     if(S.coins<STAKES[0]){
       p.textContent='Refill 500 coins';p.disabled=false;p.dataset.mode='refill';
-      bot.disabled=true;fr.disabled=true;
+      bot.disabled=false;fr.disabled=true;
       $('prize').innerHTML='';
       $('lobbyNote').textContent='You are out of coins. You can refill every 5 minutes.';
     }else{
@@ -583,7 +583,7 @@ body{margin:0}
       p.textContent='Find opponent · '+GAMES[game]+' · '+stake;p.disabled=false;p.dataset.mode='play';
       bot.disabled=false;fr.disabled=false;
       $('prize').innerHTML='<span class="w">Win: +'+stake+' coins, +3 crowns</span><span class="l">Lose: -'+stake+' coins, -1 crown</span>';
-      $('lobbyNote').textContent='You are matched with a real player who picked the same game and stake. Ties return your stake.';
+      $('lobbyNote').textContent='You are matched with a real player who picked the same game and stake. If nobody joins within about 20 seconds, a bot steps in. Ties return your stake.';
     }
   }
   function renderAll(){renderStats();renderStakes();updatePlay();}
@@ -716,8 +716,8 @@ body{margin:0}
     busy=true;goFS();send({t:'queue',game:game,stake:stake});
   };
   $('btnBot').onclick=function(){
-    if(!startGuard())return;
-    busy=true;goFS();send({t:'bot',game:game,stake:stake});
+    if(busy||!can3D(game))return;
+    startSolo();
   };
   $('btnFriend').onclick=function(){
     if(!startGuard())return;
@@ -740,16 +740,15 @@ body{margin:0}
       w.innerHTML='<h2>Finding an opponent</h2><div class="spin" aria-hidden="true"></div>'
         +'<p class="big">'+esc(GAMES[m.game])+' · '+m.stake+' coins</p>'
         +'<p class="note" id="waitNote" role="status">Searching... 0:00</p>'
-        +'<div class="btns" id="waitMore" hidden><button class="ghost" id="waitBot" type="button">Practice bot</button><button class="ghost" id="waitFriend" type="button">Play a friend</button></div>'
+        +'<div class="btns" id="waitMore" hidden><button class="ghost" id="waitFriend" type="button">Play a friend instead</button></div>'
         +'<button class="ghost" id="waitCancel" type="button">Cancel</button>';
       $('waitCancel').onclick=function(){send({t:'cancel'});};
-      $('waitBot').onclick=function(){send({t:'cancel'});busy=false;setTimeout(function(){busy=true;send({t:'bot',game:m.game,stake:m.stake});},60);};
       $('waitFriend').onclick=function(){send({t:'cancel'});busy=false;setTimeout(function(){busy=true;send({t:'room_create',game:m.game,stake:m.stake});},60);};
       waitT=setInterval(function(){
         var s=Math.floor((Date.now()-waitSince)/1000),n=$('waitNote');
         if(!n)return;
-        n.textContent=(s>=12?'Nobody else is looking for this game right now. ':'Searching... ')+Math.floor(s/60)+':'+('0'+(s%60)).slice(-2);
-        if(s>=12)$('waitMore').hidden=false;
+        n.textContent=(s>=8?'No one else yet. A bot will join soon. ':'Searching... ')+Math.floor(s/60)+':'+('0'+(s%60)).slice(-2);
+        if(s>=8)$('waitMore').hidden=false;
       },500);
     }else if(kind==='room'){
       var link=location.origin+'/?room='+m.code;
@@ -786,10 +785,10 @@ body{margin:0}
     applyMe(m.me);
     $('oppName').textContent=m.opp.name;
     $('oppLeague').textContent=LEAGUES[leagueIdx(m.opp.crowns)][0]+' · '+m.opp.crowns+' crowns';
-    $('oppLive').textContent=m.bot?'Practice bot':'Playing...';
+    $('oppLive').textContent=m.bot?'Bot opponent':'Playing...';
     $('meName').textContent=myName();
     $('myLeague').textContent=LEAGUES[leagueIdx(S.crowns)][0]+' · '+S.crowns+' crowns';
-    $('seedNote').textContent=GAMES[m.game]+' · board #'+m.seed+(m.bot?' · practice bot':' · identical for both players')+' · stake '+m.stake;
+    $('seedNote').textContent=GAMES[m.game]+' · board #'+m.seed+(m.bot?' · bot opponent':' · identical for both players')+' · stake '+m.stake;
     show('match');
     var my=token,step=Math.max(60,m.startIn/4),labels=['3','2','1','GO!'],i=0;
     $('stage').innerHTML='<div class="countdown" id="cd">3</div>';
@@ -804,6 +803,43 @@ body{margin:0}
       else if(m.game==='lane')runLane(m.seed,finishLocal);
       else runHop(m.seed,finishLocal);
     },step);
+  }
+  /* solo practice: no opponent, no stake, nothing sent to the server */
+  var soloBest={};
+  function startSolo(){
+    endLocalGame();
+    var g=game,seed=Math.floor(Math.random()*4294967296);
+    cur={solo:true,bot:true,mid:'solo',game:g,stake:0,finished:false,live:0,oppName:'',lastSentAt:0};
+    busy=true;goFS();
+    $('oppName').textContent='Solo run';$('oppLeague').textContent='No coins at stake';$('oppLive').textContent='';
+    $('meName').textContent=myName();$('myLeague').textContent=LEAGUES[leagueIdx(S.crowns)][0]+' \u00b7 '+S.crowns+' crowns';
+    $('seedNote').textContent=GAMES[g]+' \u00b7 practice';
+    show('match');
+    var my=token,labels=['3','2','1','GO!'],i=0;
+    $('stage').innerHTML='<div class="countdown" id="cd">3</div>';
+    cur.cdT=setInterval(function(){
+      i++;
+      if(i<labels.length){var c=$('cd');if(c)c.textContent=labels[i];return;}
+      clearInterval(cur.cdT);
+      if(my!==token||!cur)return;
+      var d=soloDone;
+      if(g==='orbit')runOrbit(seed,d);else if(g==='stack')runStack(seed,d);else if(g==='lane')runLane(seed,d);else runHop(seed,d);
+    },800);
+  }
+  function soloDone(score){
+    if(!cur||!cur.solo||cur.finished)return;
+    var g=cur.game;cur.finished=true;clearFit();
+    var prev=soloBest[g],isBest=prev===undefined||score>prev;
+    if(isBest)soloBest[g]=score;
+    var res=$('result');res.className='card result';
+    res.innerHTML='<h2>Practice run</h2><p class="delta up">'+fmtScore(g,score)+'</p>'
+      +'<div class="compare"><div><span>This run</span><b>'+fmtScore(g,score)+'</b></div><div><span>Best this visit</span><b>'+fmtScore(g,soloBest[g])+'</b></div></div>'
+      +(isBest&&prev!==undefined?'<p class="note" style="color:var(--cyan)">New practice best.</p>':'')
+      +'<p class="note">Practice runs do not use coins or change your crowns.</p>'
+      +'<div class="btns"><button class="cta" id="again" type="button">Practice again</button><button class="ghost" id="back" type="button">Back to lobby</button></div>';
+    cur=null;busy=false;show('result');
+    $('again').onclick=function(){game=g;startSolo();};
+    $('back').onclick=backToLobby;
   }
   /* games call this whenever their score changes */
   function rep(n){
@@ -1837,7 +1873,7 @@ body{margin:0}
     $('again').onclick=function(){
       if(S.coins<m.stake||!ready){backToLobby();return;}
       game=m.game;stake=m.stake;busy=true;goFS();
-      send(was&&was.bot?{t:'bot',game:m.game,stake:m.stake}:{t:'queue',game:m.game,stake:m.stake});
+      send({t:'queue',game:m.game,stake:m.stake});
     };
     $('back').onclick=backToLobby;
     if(S.coins<m.stake){$('again').disabled=true;$('again').textContent='Not enough coins';}
