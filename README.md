@@ -23,7 +23,7 @@ PUBLIC_URL (e.g. https://your-site.example, enables sitemap.xml), PORT, HOST, DA
 
 ## How it works
 - The server owns coins, crowns and results. Stakes are held at match start; win pays 2x stake (+3 crowns), draw refunds, loss -1 crown.
-- If nobody else joins a queue within 15-25 seconds, a bot opponent steps in (CA_QUEUE_BOT_MIN_MS / CA_QUEUE_BOT_MAX_MS).
+- If nobody else joins a queue within 15-25 seconds, a computer opponent steps in (CA_QUEUE_BOT_MIN_MS / CA_QUEUE_BOT_MAX_MS).
 - Both players get the same random seed, so the board is identical. Live opponent score is relayed.
 - Guest accounts: a secret key is stored in the browser (Profile > Your account lets you copy it to another device). The server stores only its hash.
 

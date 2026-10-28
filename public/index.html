@@ -583,7 +583,7 @@ body{margin:0}
       p.textContent='Find opponent · '+GAMES[game]+' · '+stake;p.disabled=false;p.dataset.mode='play';
       bot.disabled=false;fr.disabled=false;
       $('prize').innerHTML='<span class="w">Win: +'+stake+' coins, +3 crowns</span><span class="l">Lose: -'+stake+' coins, -1 crown</span>';
-      $('lobbyNote').textContent='You are matched with a real player who picked the same game and stake. If nobody joins within about 20 seconds, a bot steps in. Ties return your stake.';
+      $('lobbyNote').textContent='You are matched with another player who picked the same game and stake. If nobody is around, a computer opponent joins. Ties return your stake.';
     }
   }
   function renderAll(){renderStats();renderStakes();updatePlay();}
@@ -747,7 +747,7 @@ body{margin:0}
       waitT=setInterval(function(){
         var s=Math.floor((Date.now()-waitSince)/1000),n=$('waitNote');
         if(!n)return;
-        n.textContent=(s>=8?'No one else yet. A bot will join soon. ':'Searching... ')+Math.floor(s/60)+':'+('0'+(s%60)).slice(-2);
+        n.textContent='Searching... '+Math.floor(s/60)+':'+('0'+(s%60)).slice(-2);
         if(s>=8)$('waitMore').hidden=false;
       },500);
     }else if(kind==='room'){
@@ -785,10 +785,10 @@ body{margin:0}
     applyMe(m.me);
     $('oppName').textContent=m.opp.name;
     $('oppLeague').textContent=LEAGUES[leagueIdx(m.opp.crowns)][0]+' · '+m.opp.crowns+' crowns';
-    $('oppLive').textContent=m.bot?'Bot opponent':'Playing...';
+    $('oppLive').textContent=m.bot?'Computer':'Playing...';
     $('meName').textContent=myName();
     $('myLeague').textContent=LEAGUES[leagueIdx(S.crowns)][0]+' · '+S.crowns+' crowns';
-    $('seedNote').textContent=GAMES[m.game]+' · board #'+m.seed+(m.bot?' · bot opponent':' · identical for both players')+' · stake '+m.stake;
+    $('seedNote').textContent=GAMES[m.game]+' · board #'+m.seed+(m.bot?' · computer opponent':' · identical for both players')+' · stake '+m.stake;
     show('match');
     var my=token,step=Math.max(60,m.startIn/4),labels=['3','2','1','GO!'],i=0;
     $('stage').innerHTML='<div class="countdown" id="cd">3</div>';
