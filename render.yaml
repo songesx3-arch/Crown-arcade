@@ -13,3 +13,5 @@ services:
         value: https://crown-arcade.onrender.com
       - key: DATA_DIR
         value: /tmp/crown-data
+      - key: GOOGLE_CLIENT_ID
+        sync: false

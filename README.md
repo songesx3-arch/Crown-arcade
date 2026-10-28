@@ -27,6 +27,12 @@ PUBLIC_URL (e.g. https://your-site.example, enables sitemap.xml), PORT, HOST, DA
 - Both players get the same random seed, so the board is identical. Live opponent score is relayed.
 - Guest accounts: a secret key is stored in the browser (Profile > Your account lets you copy it to another device). The server stores only its hash.
 
+## Sign in with Google (optional)
+1. In Google Cloud Console create an OAuth client of type "Web application".
+2. Add your site address (for example https://crown-arcade.onrender.com) under Authorized JavaScript origins.
+3. Set the `GOOGLE_CLIENT_ID` environment variable to the client id and redeploy.
+The Profile tab then shows a Google button. Signing in links the current player to the Google account; signing in on another device opens the same player. The server checks Google's signature itself and stores only Google's user id, not your email. Sign in with Apple is not included (it needs a paid Apple developer account).
+
 ## Known limits
 - Anti-cheat is plausibility checking (score caps and rate), not replay validation. A determined cheater can still submit a high believable score. Do not attach real value to it.
 - Single server, JSON file storage, no user passwords or e-mail.

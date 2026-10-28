@@ -9,6 +9,7 @@ process.env.CA_GRACE_MS = '350';
 process.env.CA_ROOM_TTL_MS = '600';
 process.env.CA_MAX_NEW_ACCOUNTS_PER_HOUR = '1000';
 process.env.CA_MAX_CONN_PER_IP = '1000';
+process.env.GOOGLE_CLIENT_ID = 'test-client.apps.googleusercontent.com';
 const { test, before, after } = require('node:test');
 const assert = require('node:assert');
 const server = require('../server');
@@ -371,4 +372,41 @@ test('cancelling a queue stops the bot fallback', async () => {
     delete process.env.CA_QUEUE_BOT_MIN_MS;
     delete process.env.CA_QUEUE_BOT_MAX_MS;
   }
+});
+
+const crypto = require('crypto');
+function signToken(priv, kid, claims) {
+  const b = (o) => Buffer.from(JSON.stringify(o)).toString('base64url');
+  const data = b({ alg: 'RS256', kid, typ: 'JWT' }) + '.' + b(claims);
+  return data + '.' + crypto.sign('RSA-SHA256', Buffer.from(data), priv).toString('base64url');
+}
+test('google sign-in links, switches devices, and rejects bad tokens', async () => {
+  const { privateKey, publicKey } = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 });
+  const jwk = Object.assign(publicKey.export({ format: 'jwk' }), { kid: 'k1' });
+  server._setJwksFetcher(async () => [jwk]);
+  const good = (sub, extra) => signToken(privateKey, 'k1', Object.assign({ iss: 'https://accounts.google.com', aud: process.env.GOOGLE_CLIENT_ID, sub, exp: Math.floor(Date.now() / 1000) + 600 }, extra));
+  const a = await player('GoogleA');
+  a.send({ t: 'google', credential: good('sub-1') });
+  const linked = await a.next('linked');
+  assert.equal(linked.me.google, true);
+  /* a second device (new guest account) signs in with the same Google account and gets a key for the first account */
+  const b = await player('GoogleB');
+  b.send({ t: 'google', credential: good('sub-1') });
+  const sw = await b.next('switch');
+  assert.ok(sw.key && sw.key.length >= 40);
+  const c = await connect(port);
+  const w = await c.hello(sw.key);
+  assert.equal(w.t, 'welcome');
+  assert.equal(w.me.name, 'GoogleA');
+  assert.equal(w.me.google, true);
+  /* forged / wrong-audience / expired tokens are refused */
+  const d = await player('GoogleD');
+  const other = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey;
+  for (const bad of [signToken(other, 'k1', { iss: 'https://accounts.google.com', aud: process.env.GOOGLE_CLIENT_ID, sub: 'x', exp: 9999999999 }),
+    good('sub-2', { aud: 'someone-else' }), good('sub-3', { exp: 1000 }), 'garbage']) {
+    d.send({ t: 'google', credential: bad });
+    const e = await d.next('error');
+    assert.equal(e.code, 'google_bad');
+  }
+  server._setJwksFetcher(null);
 });

@@ -30,6 +30,9 @@ const ROOM_TTL_MS = Number(process.env.CA_ROOM_TTL_MS || 10 * 60 * 1000);
 const MAX_CONN_PER_IP = Number(process.env.CA_MAX_CONN_PER_IP || 30);
 const MAX_NEW_ACCOUNTS_PER_HOUR = Number(process.env.CA_MAX_NEW_ACCOUNTS_PER_HOUR || 12); /* per network address */
 const DAY = 86400000;
+const auth = require('./auth');
+const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '';
+let jwksFetcher = null; /* tests only */
 const KEY_RE = /^[A-Za-z0-9_-]{40,64}$/;
 const ROOM_CHARS = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -58,7 +61,7 @@ function cleanName(raw) {
 function view(p) {
   return {
     name: p.name, coins: p.coins, crowns: p.crowns, wins: p.wins, losses: p.losses,
-    best: p.best, dailyLeft: Math.max(0, p.daily + DAY - now()), league: rules.LEAGUES[rules.leagueIdx(p.crowns)][0],
+    best: p.best, google: !!p.google, dailyLeft: Math.max(0, p.daily + DAY - now()), league: rules.LEAGUES[rules.leagueIdx(p.crowns)][0],
   };
 }
 
@@ -339,6 +342,11 @@ function handle(s, msg) {
       if (p.coins < msg.stake) return fail(s, 'no_coins', 'Not enough coins for that stake.');
       return createBotMatch(s, msg.game, msg.stake);
     }
+    case 'google': {
+      if (!GOOGLE_CLIENT_ID) return fail(s, 'google_off', 'Google sign-in is not set up on this server.');
+      if (busy(s.id)) return fail(s, 'busy', 'Finish what you are doing first.');
+      return handleGoogle(s, msg.credential);
+    }
     case 'cancel': {
       leaveQueues(s.id);
       return sendWs(s.ws, { t: 'cancelled' });
@@ -424,7 +432,7 @@ function handleHello(s, msg) {
   let key = msg.key, id, p, isNew = false;
   if (key !== undefined && key !== null) {
     if (typeof key !== 'string' || !KEY_RE.test(key)) return fail(s, 'bad_key', 'That account key is not valid.');
-    id = hashKey(key);
+    id = store.resolve(hashKey(key));
     p = store.get(id);
     if (!p) return fail(s, 'unknown_key', 'This server does not know that account key.');
   } else {
@@ -462,6 +470,24 @@ function handleHello(s, msg) {
   broadcastOnline(true);
 }
 
+async function handleGoogle(s, credential) {
+  let g;
+  try { g = await auth.verifyGoogleIdToken(credential, { clientId: GOOGLE_CLIENT_ID, fetchJwks: jwksFetcher || undefined }); }
+  catch (e) { return fail(s, 'google_bad', 'Google sign-in could not be verified. Try again.'); }
+  if (!s.id || sessions.get(s.id) !== s || playerMatch.has(s.id)) return;
+  const existing = store.googleIndex.get(g.sub);
+  const me = store.get(s.id);
+  if (!existing) {
+    store.linkGoogle(s.id, g.sub);
+    return sendWs(s.ws, { t: 'linked', me: view(me) });
+  }
+  if (existing === s.id) return sendWs(s.ws, { t: 'linked', me: view(me) });
+  /* this Google account already has a player: hand this device a fresh key for it */
+  const key = crypto.randomBytes(32).toString('base64url');
+  if (!store.addAlias(hashKey(key), existing)) return fail(s, 'google_bad', 'That account has too many signed-in devices.');
+  sendWs(s.ws, { t: 'switch', key });
+}
+
 function onClose(s) {
   const n = (ipConns.get(s.ip) || 1) - 1;
   if (n <= 0) ipConns.delete(s.ip); else ipConns.set(s.ip, n);
@@ -480,11 +506,12 @@ const MIME = {
 };
 const CSP = [
   "default-src 'self'",
-  "script-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com",
-  "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+  "script-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com https://accounts.google.com",
+  "frame-src https://accounts.google.com",
+  "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://accounts.google.com",
   "font-src https://fonts.gstatic.com",
   "img-src 'self' data:",
-  "connect-src 'self' ws: wss:",
+  "connect-src 'self' ws: wss: https://accounts.google.com",
   "frame-ancestors 'none'",
   "base-uri 'none'",
   "form-action 'none'",
@@ -501,6 +528,10 @@ const httpServer = http.createServer((req, res) => {
   try { pathname = decodeURIComponent(new URL(req.url, 'http://x').pathname); } catch (e) { res.writeHead(400, headers); return res.end('Bad request'); }
   if (pathname === '/healthz') { res.writeHead(200, Object.assign({ 'Content-Type': 'text/plain' }, headers)); return res.end('ok'); }
   const base = (process.env.PUBLIC_URL || '').replace(/\/+$/, '');
+  if (pathname === '/config.json') {
+    res.writeHead(200, Object.assign({ 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-cache' }, headers));
+    return res.end(JSON.stringify({ googleClientId: GOOGLE_CLIENT_ID || null }));
+  }
   if (pathname === '/robots.txt') {
     res.writeHead(200, Object.assign({ 'Content-Type': 'text/plain; charset=utf-8' }, headers));
     return res.end('User-agent: *\nAllow: /\n' + (base ? 'Sitemap: ' + base + '/sitemap.xml\n' : ''));
@@ -581,4 +612,4 @@ if (require.main === module) {
   process.on('SIGTERM', bye);
 }
 
-module.exports = { start, stop, store };
+module.exports = { start, stop, store, _setJwksFetcher: (f) => { jwksFetcher = f; } };

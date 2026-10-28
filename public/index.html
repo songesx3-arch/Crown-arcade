@@ -328,7 +328,8 @@ body{margin:0}
       </section>
       <section class="card">
         <h2>Your account</h2>
-        <p class="sub">This guest account lives in this browser. Save the key to open it on another device. Keep it private.</p>
+        <div id="googleBox" hidden><p class="sub" id="googleNote"></p><div id="googleBtn" style="min-height:44px;margin:8px 0"></div></div>
+        <p class="sub">This account lives in this browser unless you sign in with Google. Save the key to open it on another device. Keep it private.</p>
         <div class="keyrow"><input class="field" id="keyOut" type="password" readonly aria-label="Account key"><button class="ghost" id="keyShow" type="button">Show</button><button class="ghost" id="keyCopy" type="button">Copy key</button></div>
         <div class="keyrow"><input class="field" id="keyIn" placeholder="Paste a key to restore" autocomplete="off" spellcheck="false" aria-label="Key to restore"><button class="ghost" id="keyRestore" type="button">Restore</button></div>
       </section>
@@ -433,6 +434,8 @@ body{margin:0}
     switch(m.t){
       case 'welcome': return onWelcome(m);
       case 'me': return applyMe(m.me);
+      case 'linked': applyMe(m.me);toast('Signed in with Google. Your progress is saved to it.');return;
+      case 'switch': setKey(m.key);toast('Signed in. Loading your account...');setTimeout(function(){location.reload();},700);return;
       case 'online': online=m.n;return renderBadge();
       case 'queued': return showWait('queue',m);
       case 'room': return showWait('room',m);
@@ -510,6 +513,31 @@ body{margin:0}
     if(!keep)$('nameIn').value=S.name;
     renderAll();
   }
+  /* Sign in with Google: only shown when the server has a Google client id */
+  var googleId=null,googleReady=false;
+  function renderGoogle(){
+    var box=$('googleBox');
+    if(!googleId){box.hidden=true;return;}
+    box.hidden=false;
+    $('googleNote').textContent=S.google?'Signed in with Google. You can open this account on any device by signing in again.':'Sign in with Google to keep your progress and play on any device.';
+    $('googleBtn').hidden=!!S.google;
+  }
+  function initGoogle(){
+    fetch('/config.json').then(function(r){return r.json();}).then(function(c){
+      if(!c||!c.googleClientId)return;
+      googleId=c.googleClientId;renderGoogle();
+      var sc=document.createElement('script');sc.src='https://accounts.google.com/gsi/client';sc.async=true;
+      sc.onload=function(){
+        try{
+          google.accounts.id.initialize({client_id:googleId,callback:function(r){if(r&&r.credential){if(!send({t:'google',credential:r.credential}))toast('Not connected yet. Try again.');}},ux_mode:'popup'});
+          google.accounts.id.renderButton($('googleBtn'),{theme:'filled_blue',size:'large',text:'signin_with',shape:'pill',width:260});
+          googleReady=true;
+        }catch(e){}
+      };
+      sc.onerror=function(){$('googleNote').textContent='Google sign-in could not load. Check your connection.';};
+      document.head.appendChild(sc);
+    }).catch(function(){});
+  }
   function renderBadge(){
     $('liveBadge').textContent=ready?('Live arena · '+online+' online'):'Connecting...';
   }
@@ -550,7 +578,7 @@ body{margin:0}
       var st=n===i?'now':(n<i?'done':'locked');
       return '<li class="tier '+st+'" style="--tc:'+TIER_COL[n]+'"><span class="dot"></span><b>'+l[0]+'</b><span class="th">'+(l[1]?l[1]+'+ crowns':'Starting league')+'</span><span class="st">'+(st==='now'?'You are here':(st==='done'?'Reached':''))+'</span></li>';
     }).join('');
-    renderBests();renderDaily();renderBadge();
+    renderBests();renderDaily();renderBadge();renderGoogle();
   }
   function renderStakes(){
     var box=$('stakes');box.innerHTML='';
@@ -1881,6 +1909,7 @@ body{margin:0}
 
   try{var q=new URLSearchParams(location.search).get('room');if(q&&/^[A-Za-z0-9]{4}$/.test(q)){joinCode=q.toUpperCase();history.replaceState(null,'',location.pathname);}}catch(e){}
   renderKey();
+  initGoogle();
   renderAll();
   show('lobby');
   connect();
