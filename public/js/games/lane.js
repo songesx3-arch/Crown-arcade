@@ -12,7 +12,7 @@
     K = CA.three;
     var W = 360, H = 520;
     var SC = 0.4;                /* world units per metre */
-    var LANE = 2.4, FINISH = 2000;
+    var LANE = 2.4, FINISH = Infinity; /* endless: the run only ends when you crash */
     var HIT_X = 1.13, NEAR_X = 1.79, HIT_Z = 4.8;
     function spdAt(m) { return Math.min(95, 42 + m * 0.045); } /* metres per second */
 
@@ -103,16 +103,23 @@
       } else { x.fillStyle = '#14092e'; x.fillRect(0, 0, 256, 64); x.strokeStyle = '#ffc93c'; x.lineWidth = 6; x.strokeRect(3, 3, 250, 58); }
       x.fillStyle = '#ffc93c'; x.font = "38px 'Lilita One', Impact, sans-serif"; x.textAlign = 'center'; x.textBaseline = 'middle';
       x.fillText(text, 128, 34);
-      return own(new THREE.CanvasTexture(c));
+      var tex = own(new THREE.CanvasTexture(c));
+      tex.redrawSign = function (txt) {
+        x.fillStyle = '#14092e'; x.fillRect(0, 0, 256, 64); x.strokeStyle = '#ffc93c'; x.lineWidth = 6; x.strokeRect(3, 3, 250, 58);
+        x.fillStyle = '#ffc93c'; x.fillText(txt, 128, 34);
+        tex.needsUpdate = true;
+      };
+      return tex;
     }
     var gantries = [];
-    for (i = 1; i <= 10; i++) {
-      var gg = new THREE.Group(), fin = i === 10;
+    for (i = 1; i <= 9; i++) {
+      var gg = new THREE.Group(), fin = false;
       [-1, 1].forEach(function (s) { K.rb(0.3, 6, 0.3, 0.1, 0x4a3b8c, s * 4.6, 3, 0, gg); });
       K.rb(9.6, 1.9, 0.36, 0.14, 0x2a1f60, 0, 5.3, 0, gg);
-      var sign = K.mesh(new THREE.PlaneGeometry(6.4, 1.6), own(new THREE.MeshBasicMaterial({ map: signTexture(fin ? 'FINISH' : i * 200 + ' m', fin) })), 0, 5.3, 0.2, gg);
+      var stex = signTexture(i * 200 + ' m', fin);
+      var sign = K.mesh(new THREE.PlaneGeometry(6.4, 1.6), own(new THREE.MeshBasicMaterial({ map: stex })), 0, 5.3, 0.2, gg);
       scene.add(gg);
-      gantries.push({ g: gg, m: i * 200 });
+      gantries.push({ g: gg, m: i * 200, tex: stex });
     }
 
     /* speed streaks */
@@ -137,7 +144,8 @@
       K.mesh(K.rbox(0.3, 0.12, 0.08, 0.04), K.basic(0xfff3b0), x, 0.56, -1.3, car);
     });
     var wheelGeo = K.geo('wheel', function () { var g = new THREE.CylinderGeometry(0.32, 0.32, 0.26, 20); g.rotateZ(Math.PI / 2); return g; });
-    [[-0.68, -0.82], [0.68, -0.82], [-0.68, 0.82], [0.68, 0.82]].forEach(function (p) { K.mesh(wheelGeo, K.lam(0x0b0718), p[0], 0.32, p[1], car); });
+    var carWheels = [];
+    [[-0.68, -0.82], [0.68, -0.82], [-0.68, 0.82], [0.68, 0.82]].forEach(function (p) { carWheels.push(K.mesh(wheelGeo, K.lam(0x0b0718), p[0], 0.32, p[1], car)); });
     var under = K.mesh(new THREE.PlaneGeometry(2, 3.2), own(new THREE.MeshBasicMaterial({ color: 0x3ee6a0, transparent: true, opacity: 0.35, depthWrite: false })), 0, 0.03, 0, car);
     under.rotation.x = -Math.PI / 2;
     var beam = K.mesh(new THREE.PlaneGeometry(2.6, 7), own(new THREE.MeshBasicMaterial({ color: 0xfff3b0, transparent: true, opacity: 0.12, depthWrite: false })), 0, 0.04, -4.8, car);
@@ -189,6 +197,8 @@
     /* ---------------------------------------------------------------- state */
     var r = api.rng;
     var lane = 1, cx = 0, d = 0, rows = [], nextM = 52, openL = 1;
+    var tAcc = 0;
+    function boostNow(s) { return Math.max(0, Math.min(1, (s - 42) / 53)); }
     var over = false, finished = false, flash = 0, spin = 0, shake = 0, raf = 0, last = 0;
     function laneX(l) { return (l - 1) * LANE; }
 
@@ -287,6 +297,7 @@
       posts.forEach(function (o) { o.g.position.z = 4 - o.i * 4.8 + f2; });
       gridTex.offset.y = (dz / 4) % 1;
       gantries.forEach(function (o) {
+        if (d - o.m > 20) { o.m += 1800; o.tex.redrawSign(o.m + ' m'); } /* endless road: gantries are reused ahead of you */
         var rel = (o.m - d) * SC;
         o.g.visible = rel > -6 && rel < 60;
         if (o.g.visible) o.g.position.z = -rel;
@@ -299,9 +310,11 @@
         if (s.position.z > 8) { s.position.z = -50; s.position.x = (Math.random() < 0.5 ? -1 : 1) * (1.5 + Math.random() * 5); }
       });
 
+      tAcc += dt;
+      carWheels.forEach(function (w) { w.rotation.x -= spd * SC * dt * 3.2; });
       car.position.x = cx;
-      car.position.y = 0;
-      car.rotation.set(0, -(laneX(lane) - cx) * 0.08, -(laneX(lane) - cx) * 0.06);
+      car.position.y = over ? 0 : Math.abs(Math.sin(tAcc * 18)) * 0.025 * (0.4 + boostNow(spd)); /* engine rumble */
+      car.rotation.set(over ? 0 : -0.02 - boostNow(spd) * 0.03, -(laneX(lane) - cx) * 0.08, -(laneX(lane) - cx) * 0.06);
       if (over && !finished && flash > 0) { car.rotation.y = spin; car.position.y = Math.abs(Math.sin(spin)) * 0.4; }
 
       shake = Math.max(0, shake - dt * 2.2);
@@ -310,6 +323,7 @@
       cam.updateProjectionMatrix();
       cam.position.set(cx * 0.55 + (Math.random() - 0.5) * sh, 4.4 + (Math.random() - 0.5) * sh, 7.2 - boost * 0.9);
       cam.lookAt(cx * 0.55, 0.4, -7);
+      cam.rotateZ((laneX(lane) - cx) * 0.012); /* lean the camera into lane changes */
     }
 
     function frame(now) {

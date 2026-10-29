@@ -22,7 +22,8 @@ const REFILL_EVERY_MS = 5 * 60 * 1000;
 const HISTORY_LEN = 12;
 
 /* The most a game can ever score, and the most it can gain per second (human-possible, with headroom). */
-const CAPS = { orbit: 300, stack: 150, lane: 2000, hop: 100 };
+/* Generous ceilings only: the games are endless, the per-second RATE below is the real limit. */
+const CAPS = { orbit: 300, stack: 100000, lane: 1000000, hop: 100000 };
 const RATE = { orbit: 30, stack: 8, lane: 100, hop: 10 };
 const SLACK_S = 2.0; /* covers network delay and clock differences between the two players */
 

@@ -12,6 +12,9 @@ npm test           # server protocol, payouts, rematch, reconnects, crash refund
 
 Node 18+, one dependency (`ws`). Deploy anywhere with WebSocket support (`render.yaml` and `Dockerfile` included). Run exactly one server instance and give `DATA_DIR` a persistent disk.
 
+## Endless 3D games
+Stack, Lane Dash and Road Hop no longer have a score ceiling; a run ends when you fail (or when the match time limit hits). The server plausibility check is a per-second rate, with very high ceilings.
+
 ## What changed in 2.0
 
 **Gameplay and idea**

@@ -13,7 +13,7 @@
 
   CA.games.hop = function (api) {
     K = CA.three;
-    var W = 360, H = 520, COLS = 9, CAP = 100, P = 24, HOP_T = 0.12, EDGE = 0.35;
+    var W = 360, H = 520, COLS = 9, P = 24, HOP_T = 0.12, EDGE = 0.35;
 
     api.fit(W / H);
     var ren = K.renderer(api.canvas, W, H);
@@ -110,7 +110,8 @@
       K.rb(0.06, 0.12, 0.62, 0.03, K.basic(0xfff3b0), L / 2, 0.42, 0, body);
       K.rb(0.06, 0.1, 0.62, 0.03, K.basic(0xff3355), -L / 2, 0.42, 0, body);
       var wx = L > 2.5 ? [L / 2 - 0.5, -0.2, -0.9] : [L / 2 - 0.42, -L / 2 + 0.42];
-      wx.forEach(function (x) { [-0.42, 0.42].forEach(function (z) { K.mesh(G.wheel, K.lam(0x1a1430), x, 0.2, z, body); }); });
+      g.userData.wheels = [];
+      wx.forEach(function (x) { [-0.42, 0.42].forEach(function (z) { g.userData.wheels.push(K.mesh(G.wheel, K.lam(0x1a1430), x, 0.2, z, body)); }); });
       if (row.dir < 0) body.rotation.y = Math.PI;
       g.add(body);
       return g;
@@ -198,6 +199,11 @@
     var splashMat = own(new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.85, depthWrite: false }));
     var splash = K.mesh(own(new THREE.RingGeometry(0.2, 0.34, 24)), splashMat, 0, 0, 0, scene);
     splash.rotation.x = -Math.PI / 2; splash.visible = false;
+    /* little dust ring where the chicken lands */
+    var dustMat = own(new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0, depthWrite: false }));
+    var dust = K.mesh(own(new THREE.RingGeometry(0.22, 0.3, 20)), dustMat, 0, 0.06, 0, scene);
+    dust.rotation.x = -Math.PI / 2; dust.visible = false;
+    var dustAt = -9;
 
     /* ---------------------------------------------------------------- state */
     var gx = 0, rx = 0, pr = 0, rrw = 0, mr = 0, cam = 0, camT = 0, yaw = 0, yawT = 0, hopT = 0, standY = 0;
@@ -230,13 +236,13 @@
         if (!on) dead = true;
       }
       gx = nx; pr = nr; hopT = HOP_T; moved = true;
+      dustAt = tNow(); dust.position.set(gx, 0.06, -pr); dust.visible = true;
       api.sfx('tap');
       if (dead) return die('water');
       if (pr > mr) {
         mr = pr;
         api.score(mr);
         if (mr % 25 === 0) api.pop(mr + ' ROWS!', '#ffe38a');
-        if (mr >= CAP) { over = true; flash = 0; endSoon(); }
       }
     }
 
@@ -301,7 +307,11 @@
         var rw = cache[i];
         if (rw && rw.g && rw.meshes) {
           var xs = movers(rw, t);
-          rw.meshes.forEach(function (m, j) { m.position.x = xs[j]; if (rw.t === 'w') m.position.y = -0.05 + Math.sin(t * 2 + j + i) * 0.025; });
+          rw.meshes.forEach(function (m, j) {
+            m.position.x = xs[j];
+            if (rw.t === 'w') m.position.y = -0.05 + Math.sin(t * 2 + j + i) * 0.025;
+            else if (m.userData && m.userData.wheels) { var wr = -xs[j] * 5; m.userData.wheels.forEach(function (w) { w.rotation.z = wr; }); m.position.y = Math.abs(Math.sin(t * 14 + j + i)) * 0.012; }
+          });
         }
       }
       var prog = hopT > 0 ? 1 - hopT / HOP_T : 0, lift = hopT > 0 ? Math.sin(prog * Math.PI) * 0.6 : 0;
@@ -309,7 +319,8 @@
       standY += (standT - standY) * 0.35;
       hero.position.set(rx, standY + lift, -rrw);
       hero.rotation.y = yaw;
-      var st = 1 + Math.sin(prog * Math.PI) * 0.16, sq = Math.max(0.86, 2 - st);
+      var idle = !over && hopT <= 0 ? Math.sin(t * 6) * 0.035 : 0; /* breathing bob while waiting */
+      var st = 1 + Math.sin(prog * Math.PI) * 0.16 + idle, sq = Math.max(0.86, 2 - st);
       body.scale.set(sq, st, sq);
       if (over && flash > 0 && !drown) body.scale.set(1.3, 0.2, 1.3);
       if (drown) {
@@ -318,6 +329,8 @@
         var ss = 1 + splashT * 5; splash.scale.set(ss, ss, ss);
         splashMat.opacity = Math.max(0, 0.85 - splashT * 1.2);
       }
+      var dage = t - dustAt;
+      if (dage < 0.4) { var ds = 1 + dage * 5; dust.scale.set(ds, ds, ds); dustMat.opacity = Math.max(0, 0.55 - dage * 1.4); } else dust.visible = false;
       shadow.visible = cur.t !== 'w';
       shadow.position.set(rx, 0.02, -rrw);
       var sc = 1 - lift * 0.4; shadow.scale.set(sc, sc, sc);

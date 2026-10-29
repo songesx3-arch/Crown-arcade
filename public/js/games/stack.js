@@ -10,7 +10,7 @@
 
   CA.games.stack = function (api) {
     K = CA.three;
-    var W = 360, H = 540, BH = 0.8, START = 3, CAP = 150, LIM = 5.2, SNAP = 0.12, GROW = 0.3;
+    var W = 360, H = 540, BH = 0.8, START = 3, LIM = 5.2, SNAP = 0.12, GROW = 0.3;
 
     api.fit(W / H);
     var cv = api.canvas;
@@ -51,7 +51,7 @@
 
     var tower = [{ x: 0, z: 0, w: START, d: START }];
     tower[0].mesh = block(tower[0], 0, colorAt(0));
-    var cur = null, debris = [], waves = [];
+    var cur = null, debris = [], waves = [], lands = [], sparks = [], clouds = [], tAcc = 0;
     var over = false, flash = 0, glow = 0, perfects = 0, camY = 0, last = 0, raf = 0;
 
     function newCur(dir) {
@@ -80,6 +80,53 @@
       m.userData = { w: b.w, d: b.d };
       scene.add(m);
       waves.push({ m: m, t: 0 });
+    }
+
+    /* little burst of sparks on a perfect drop */
+    var sparkGeo = new THREE.BoxGeometry(0.16, 0.16, 0.16);
+    var sparkMat = new THREE.MeshBasicMaterial({ color: 0xffe38a, transparent: true });
+    owned.push(sparkMat);
+    function sparkBurst(b, level) {
+      for (var i = 0; i < 12; i++) {
+        var m = new THREE.Mesh(sparkGeo, sparkMat);
+        var a = Math.random() * Math.PI * 2;
+        m.position.set(b.x + Math.cos(a) * b.w * 0.45, level * BH + BH, b.z + Math.sin(a) * b.d * 0.45);
+        scene.add(m);
+        sparks.push({ m: m, vx: Math.cos(a) * (2 + Math.random() * 2), vz: Math.sin(a) * (2 + Math.random() * 2), vy: 3 + Math.random() * 3, t: 0 });
+      }
+    }
+
+    /* soft clouds drifting behind the tower (placed in screen space so they always stay in view) */
+    var cloudTex = (function () {
+      var c = document.createElement('canvas'); c.width = 128; c.height = 64;
+      var x = c.getContext('2d');
+      [[34, 38, 22], [60, 30, 28], [90, 38, 22], [64, 42, 26]].forEach(function (p) {
+        var g = x.createRadialGradient(p[0], p[1], 2, p[0], p[1], p[2]);
+        g.addColorStop(0, 'rgba(255,255,255,0.9)'); g.addColorStop(1, 'rgba(255,255,255,0)');
+        x.fillStyle = g; x.beginPath(); x.arc(p[0], p[1], p[2], 0, Math.PI * 2); x.fill();
+      });
+      var t = new THREE.CanvasTexture(c); owned.push(t); return t;
+    })();
+    for (var ci = 0; ci < 6; ci++) {
+      var cmat = new THREE.SpriteMaterial({ map: cloudTex, transparent: true, opacity: 0.28 + (ci % 3) * 0.08, depthWrite: false });
+      owned.push(cmat);
+      var cs = new THREE.Sprite(cmat);
+      var csz = 3.2 + (ci % 3) * 1.2;
+      cs.scale.set(csz, csz / 2, 1);
+      scene.add(cs);
+      clouds.push({ s: cs, sx: -hw + (ci / 6) * hw * 2, sy: -hh + ((ci * 37) % 100) / 100 * hh * 2, v: 0.25 + (ci % 3) * 0.18, par: 0.12 + (ci % 3) * 0.08 });
+    }
+    var fwdV = new THREE.Vector3(), rightV = new THREE.Vector3(), upV = new THREE.Vector3();
+    function animateClouds(dt) {
+      cam.getWorldDirection(fwdV);
+      rightV.crossVectors(fwdV, cam.up).normalize();
+      upV.crossVectors(rightV, fwdV).normalize();
+      clouds.forEach(function (c) {
+        c.sx += c.v * dt;
+        if (c.sx > hw + 3) c.sx = -hw - 3;
+        var sy = ((c.sy + camY * c.par + hh) % (hh * 2) + hh * 2) % (hh * 2) - hh; /* slides down as the tower climbs */
+        c.s.position.copy(cam.position).addScaledVector(fwdV, 60).addScaledVector(rightV, c.sx).addScaledVector(upV, -sy);
+      });
     }
 
     function endSoon() {
@@ -126,7 +173,9 @@
       if (glow > 0) wave(nb, n);
       api.score(floors());
       paintSky(floors());
-      if (floors() >= CAP) { cur = null; over = true; flash = 0; return endSoon(); }
+      lands.push({ m: nb.mesh, lvl: n, t: 0 });
+      if (glow > 0) sparkBurst(nb, n);
+      if (tower.length > 40) tower[tower.length - 40].mesh.visible = false; /* endless tower: stop drawing what is far below */
       newCur(-cur.dir);
     }
 
@@ -150,8 +199,25 @@
         cur[P] += cur.dir * sp * dt;
         if (cur[P] > LIM) { cur[P] = LIM; cur.dir = -1; }
         if (cur[P] < -LIM) { cur[P] = -LIM; cur.dir = 1; }
-        cur.mesh.position.set(cur.x, tower.length * BH + BH / 2, cur.z);
+        cur.mesh.position.set(cur.x, tower.length * BH + BH / 2 + Math.sin(tAcc * 7) * 0.05, cur.z);
+        /* lean into the direction of travel */
+        if (P === 'x') cur.mesh.rotation.z = -cur.dir * 0.07; else cur.mesh.rotation.x = cur.dir * 0.07;
       }
+      tAcc += dt;
+      /* landing squash and spring */
+      for (var li = lands.length - 1; li >= 0; li--) {
+        var ld = lands[li]; ld.t += dt;
+        var kk = Math.max(0, 1 - ld.t * 3.2), sq = 1 - 0.38 * kk * Math.cos(ld.t * 26);
+        ld.m.scale.y = BH * sq; ld.m.position.y = ld.lvl * BH + ld.m.scale.y / 2;
+        if (ld.t > 0.32) { ld.m.scale.y = BH; ld.m.position.y = ld.lvl * BH + BH / 2; lands.splice(li, 1); }
+      }
+      for (var si = sparks.length - 1; si >= 0; si--) {
+        var sp2 = sparks[si]; sp2.t += dt; sp2.vy -= 14 * dt;
+        sp2.m.position.x += sp2.vx * dt; sp2.m.position.z += sp2.vz * dt; sp2.m.position.y += sp2.vy * dt;
+        sp2.m.scale.setScalar(Math.max(0.01, 1 - sp2.t * 1.8));
+        if (sp2.t > 0.55) { scene.remove(sp2.m); sparks.splice(si, 1); }
+      }
+      animateClouds(dt);
       if (flash > 0) flash -= dt;
 
       var topMesh = tower[tower.length - 1].mesh;
