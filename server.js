@@ -4,10 +4,11 @@
  *
  * How a duel works
  *   1. Both players join the same game + stake queue (or one makes a room code and the other types it).
- *   2. The server takes both stakes, picks the random seed and tells both browsers to start.
+ *   2. The server takes both stakes (escrow), picks the random seed and tells both browsers to start.
  *      Both play the exact same board at the same time and see each other's live score.
  *   3. Each browser reports its final score. The server checks it is possible for that much time,
  *      decides the winner, pays out and updates crowns. Coins and crowns only ever change here.
+ *   4. For 30 seconds after a duel between two people, either can offer a rematch.
  *
  * Coins are virtual. There is no cash play.
  */
@@ -17,40 +18,52 @@ const path = require('path');
 const crypto = require('crypto');
 const { WebSocketServer } = require('ws');
 const rules = require('./rules');
+const auth = require('./auth');
 const { Store } = require('./store');
 
-const PORT = Number(process.env.PORT || 3000);
-const HOST = process.env.HOST || '0.0.0.0';
-const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
-const TRUST_PROXY = process.env.TRUST_PROXY === '1';
-const START_IN_MS = Number(process.env.CA_START_IN_MS || 3200); /* countdown shown before play */
-const LIMIT_MS = Number(process.env.CA_MATCH_LIMIT_MS || 190000); /* hard cap on a match */
-const GRACE_MS = Number(process.env.CA_GRACE_MS || 60000); /* time left for the second player once the first is done */
-const ROOM_TTL_MS = Number(process.env.CA_ROOM_TTL_MS || 10 * 60 * 1000);
-const MAX_CONN_PER_IP = Number(process.env.CA_MAX_CONN_PER_IP || 30);
-const MAX_NEW_ACCOUNTS_PER_HOUR = Number(process.env.CA_MAX_NEW_ACCOUNTS_PER_HOUR || 12); /* per network address */
+/* ------------------------------------------------------------------ config */
+const env = (k, d) => (process.env[k] === undefined || process.env[k] === '' ? d : process.env[k]);
+const PORT = Number(env('PORT', 3000));
+const HOST = env('HOST', '0.0.0.0');
+const DATA_DIR = env('DATA_DIR', path.join(__dirname, 'data'));
+const TRUST_PROXY = env('TRUST_PROXY', '') === '1';
+const GOOGLE_CLIENT_ID = env('GOOGLE_CLIENT_ID', '');
+const START_IN_MS = Number(env('CA_START_IN_MS', 3200));         /* countdown before play */
+const LIMIT_MS = Number(env('CA_MATCH_LIMIT_MS', 190000));        /* hard cap on a match */
+const GRACE_MS = Number(env('CA_GRACE_MS', 60000));               /* time left for the 2nd player once the 1st is done */
+const ROOM_TTL_MS = Number(env('CA_ROOM_TTL_MS', 10 * 60 * 1000));
+const REMATCH_MS = Number(env('CA_REMATCH_MS', 30000));
+const MAX_CONN_PER_IP = Number(env('CA_MAX_CONN_PER_IP', 30));
+const MAX_NEW_ACCOUNTS_PER_HOUR = Number(env('CA_MAX_NEW_ACCOUNTS_PER_HOUR', 12));
+const BOT_MIN_MS = () => Number(env('CA_QUEUE_BOT_MIN_MS', 15000));
+const BOT_MAX_MS = () => Number(env('CA_QUEUE_BOT_MAX_MS', 25000));
+
 const DAY = 86400000;
-const auth = require('./auth');
-const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '';
-let jwksFetcher = null; /* tests only */
 const KEY_RE = /^[A-Za-z0-9_-]{40,64}$/;
 const ROOM_CHARS = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
 const PUBLIC_DIR = path.join(__dirname, 'public');
+const BOT_NAMES = ['Skylark', 'RexTap', 'Mono', 'JuneBug', 'Orbiter', 'Fennel', 'Quill', 'Marlo', 'TidalWave',
+  'Nimbus', 'Pixel', 'Juno', 'Comet', 'Bramble', 'Kestrel', 'Nova', 'Sprocket', 'Velvet'];
 
+/* ------------------------------------------------------------------ state */
 const store = new Store(DATA_DIR);
-const sessions = new Map(); /* account id -> connected session (one tab per account) */
-const queues = new Map(); /* "game:stake" -> waiting entries */
-const queued = new Map(); /* account id -> entry */
-const rooms = new Map(); /* code -> room */
+const sessions = new Map();   /* account id -> connected session (one tab per account) */
+const queues = new Map();     /* "game:stake" -> waiting entries */
+const queued = new Map();     /* account id -> queue entry */
+const rooms = new Map();      /* code -> room */
 const roomByHost = new Map(); /* account id -> room */
-const matches = new Map(); /* match id -> match */
-const playerMatch = new Map(); /* account id -> match */
+const matches = new Map();    /* match id -> match */
+const playerMatch = new Map();/* account id -> match */
+const offers = new Map();     /* finished match id -> rematch offer */
+const offerOf = new Map();    /* account id -> rematch offer */
 const ipConns = new Map();
 const ipNewAccounts = new Map();
+let jwksFetcher = null;       /* tests only */
 
 /* ------------------------------------------------------------------ helpers */
-const hashKey = (key) => crypto.createHash('sha256').update(key).digest('hex');
 const now = () => Date.now();
+const hashKey = (key) => crypto.createHash('sha256').update(key).digest('hex');
+const leagueName = (crowns) => rules.LEAGUES[rules.leagueIdx(crowns)][0];
 
 function cleanName(raw) {
   let n = typeof raw === 'string' ? raw : '';
@@ -58,24 +71,33 @@ function cleanName(raw) {
   return n || 'Player' + crypto.randomInt(100, 1000);
 }
 
+/* What a player is allowed to see about their own account. */
 function view(p) {
   return {
-    name: p.name, coins: p.coins, crowns: p.crowns, wins: p.wins, losses: p.losses,
-    best: p.best, google: !!p.google, dailyLeft: Math.max(0, p.daily + DAY - now()), league: rules.LEAGUES[rules.leagueIdx(p.crowns)][0],
+    name: p.name, coins: p.coins, crowns: p.crowns,
+    wins: p.wins, losses: p.losses, draws: p.draws,
+    streak: p.streak, bestStreak: p.bestStreak,
+    best: p.best, history: p.history, google: !!p.google,
+    dailyLeft: Math.max(0, p.daily + DAY - now()),
+    refillLeft: Math.max(0, p.refillAt + rules.REFILL_EVERY_MS - now()),
+    league: leagueName(p.crowns),
   };
 }
 
 function sendWs(ws, obj) {
   if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj));
 }
+
 function sendTo(id, obj) {
   const s = sessions.get(id);
   if (s) sendWs(s.ws, obj);
   return !!s;
 }
+
 function fail(s, code, msg, extra) {
   sendWs(s.ws, Object.assign({ t: 'error', code, msg }, extra || {}));
 }
+
 function clientIp(req) {
   if (TRUST_PROXY) {
     const xff = req.headers['x-forwarded-for'];
@@ -83,18 +105,24 @@ function clientIp(req) {
   }
   return req.socket.remoteAddress || 'unknown';
 }
+
 function busy(id) {
   return playerMatch.has(id) || queued.has(id) || roomByHost.has(id);
 }
+
 function pruneHits(list, windowMs) {
   const cut = now() - windowMs;
   while (list.length && list[0] < cut) list.shift();
   return list;
 }
 
+const validGame = (g) => typeof g === 'string' && rules.GAMES.includes(g);
+const validStake = (x) => Number.isInteger(x) && rules.STAKES.includes(x);
+
 /* ------------------------------------------------------------------ online count */
 let lastOnline = -1;
-function onlineCount() { return sessions.size; }
+const onlineCount = () => sessions.size;
+
 function broadcastOnline(force) {
   const n = onlineCount();
   if (!force && n === lastOnline) return;
@@ -116,16 +144,22 @@ function leaveQueues(id) {
   if (room) { rooms.delete(room.code); roomByHost.delete(id); clearTimeout(room.timer); }
 }
 
+function canPlay(id, stake) {
+  const p = store.get(id);
+  return !!p && sessions.has(id) && p.coins >= stake && !playerMatch.has(id);
+}
+
 function enqueue(s, game, stake) {
   const key = game + ':' + stake;
-  const entry = { id: s.id, key, game, stake, since: now() };
   const list = queues.get(key) || [];
   queues.set(key, list);
+
   /* pair with the waiting player closest in crowns */
+  const myCrowns = store.get(s.id).crowns;
   let best = null, bestGap = Infinity;
   for (const other of list) {
     if (other.id === s.id || !sessions.has(other.id)) continue;
-    const gap = Math.abs(store.get(other.id).crowns - store.get(s.id).crowns);
+    const gap = Math.abs(store.get(other.id).crowns - myCrowns);
     if (gap < bestGap) { best = other; bestGap = gap; }
   }
   if (best) {
@@ -135,10 +169,13 @@ function enqueue(s, game, stake) {
     createMatch(best.id, s.id, game, stake);
     return;
   }
+
+  const entry = { id: s.id, key, game, stake, since: now(), timer: null };
   list.push(entry);
   queued.set(s.id, entry);
-  /* nobody to play? after 15-25 seconds a bot steps in (tunable for tests) */
-  const lo = Number(process.env.CA_QUEUE_BOT_MIN_MS || 15000), hi = Number(process.env.CA_QUEUE_BOT_MAX_MS || 25000);
+
+  /* nobody to play? after 15-25 seconds a computer opponent steps in */
+  const lo = BOT_MIN_MS(), hi = BOT_MAX_MS();
   entry.timer = setTimeout(() => {
     if (queued.get(s.id) !== entry) return;
     const sess = sessions.get(s.id);
@@ -150,120 +187,158 @@ function enqueue(s, game, stake) {
   sendWs(s.ws, { t: 'queued', game, stake });
 }
 
-function canPlay(id, stake) {
+function newMatch(game, stake, bot) {
+  const startAt = now() + START_IN_MS;
+  return {
+    id: crypto.randomBytes(6).toString('hex'),
+    game, stake, bot,
+    seed: crypto.randomInt(100000, 1000000),
+    startAt, hard: startAt + LIMIT_MS, deadline: startAt + LIMIT_MS,
+    players: [], timer: null, done: false,
+  };
+}
+
+function takeStake(m, id) {
   const p = store.get(id);
-  return p && sessions.has(id) && p.coins >= stake && !playerMatch.has(id);
+  p.coins -= m.stake;
+  p.escrow = { mid: m.id, stake: m.stake };
+  m.players.push({ id, res: null, forfeit: false, flagged: false, live: 0, lastProg: 0 });
+  playerMatch.set(id, m);
 }
 
 function createMatch(idA, idB, game, stake) {
-  /* the other side may have gone away or spent coins while waiting */
+  /* either side may have gone away or spent coins while waiting */
   const okA = canPlay(idA, stake), okB = canPlay(idB, stake);
   if (!okA || !okB) {
     for (const [id, ok] of [[idA, okA], [idB, okB]]) {
-      if (!ok) { sendTo(id, { t: 'error', code: 'match_failed', msg: 'The match could not start.' }); }
+      if (!ok) sendTo(id, { t: 'error', code: 'match_failed', msg: 'The match could not start.' });
       else { const s = sessions.get(id); if (s) enqueue(s, game, stake); }
     }
     return;
   }
-  const mid = crypto.randomBytes(6).toString('hex');
-  const seed = crypto.randomInt(100000, 1000000);
-  const startAt = now() + START_IN_MS;
-  const m = { id: mid, game, stake, seed, startAt, bot: false, hard: startAt + LIMIT_MS, deadline: startAt + LIMIT_MS, timer: null, done: false, firstDoneAt: 0, players: [] };
-  for (const id of [idA, idB]) {
-    const p = store.get(id);
-    p.coins -= stake;
-    p.escrow = { mid, stake };
-    m.players.push({ id, res: null, forfeit: false, flagged: false, live: 0, lastProg: 0 });
-    playerMatch.set(id, m);
-  }
-  matches.set(mid, m);
+  const m = newMatch(game, stake, false);
+  takeStake(m, idA);
+  takeStake(m, idB);
+  matches.set(m.id, m);
   store.touch();
   armDeadline(m);
   for (let i = 0; i < 2; i++) {
-    const me = m.players[i], opp = m.players[1 - i];
-    const op = store.get(opp.id);
-    sendTo(me.id, {
-      t: 'match', mid, game, stake, seed, startIn: START_IN_MS, limitMs: LIMIT_MS, bot: false,
-      opp: { name: op.name, crowns: op.crowns }, me: view(store.get(me.id)),
+    const me = store.get(m.players[i].id), op = store.get(m.players[1 - i].id);
+    sendTo(m.players[i].id, {
+      t: 'match', mid: m.id, game, stake, seed: m.seed, startIn: START_IN_MS, limitMs: LIMIT_MS, bot: false,
+      opp: { name: op.name, crowns: op.crowns, streak: op.streak }, me: view(me),
     });
   }
 }
 
 function createBotMatch(s, game, stake) {
   const p = store.get(s.id);
-  const mid = crypto.randomBytes(6).toString('hex');
-  const seed = crypto.randomInt(100000, 1000000);
-  const startAt = now() + START_IN_MS;
-  const names = ['Skylark', 'RexTap', 'Mono', 'JuneBug', 'Orbit', 'Fennel', 'Quill', 'Marlo', 'TidalWave', 'Nimbus', 'Cobalt', 'Zed'];
-  const r = rules.rng(seed ^ 0x5bd1e995);
-  const bot = { name: names[Math.floor(r() * names.length)] + Math.floor(r() * 90 + 10), crowns: Math.max(0, p.crowns + Math.floor(r() * 13) - 6) };
-  bot.score = rules.botScore(game, seed, p.best[game], p.crowns);
-  p.coins -= stake;
-  p.escrow = { mid, stake };
-  const m = { id: mid, game, stake, seed, startAt, bot, hard: startAt + LIMIT_MS, deadline: startAt + LIMIT_MS, timer: null, done: false, firstDoneAt: 0, players: [{ id: s.id, res: null, forfeit: false, flagged: false, live: 0, lastProg: 0 }] };
-  playerMatch.set(s.id, m);
-  matches.set(mid, m);
+  const m = newMatch(game, stake, null);
+  const r = rules.rng(m.seed ^ 0x5bd1e995);
+  m.bot = {
+    name: BOT_NAMES[Math.floor(r() * BOT_NAMES.length)] + Math.floor(r() * 90 + 10),
+    crowns: Math.max(0, p.crowns + Math.floor(r() * 9) - 4),
+    score: rules.botScore(game, m.seed, p.best[game], p.crowns),
+  };
+  takeStake(m, s.id);
+  matches.set(m.id, m);
   store.touch();
   armDeadline(m);
-  sendWs(s.ws, { t: 'match', mid, game, stake, seed, startIn: START_IN_MS, limitMs: LIMIT_MS, bot: true, opp: { name: bot.name, crowns: bot.crowns }, me: view(p) });
+  sendWs(s.ws, {
+    t: 'match', mid: m.id, game, stake, seed: m.seed, startIn: START_IN_MS, limitMs: LIMIT_MS, bot: true,
+    opp: { name: m.bot.name, crowns: m.bot.crowns, streak: 0 }, me: view(p),
+  });
 }
 
 function armDeadline(m) {
   clearTimeout(m.timer);
   m.timer = setTimeout(() => resolve(m, 'timeout'), Math.max(0, m.deadline - now()));
+  if (m.timer.unref) m.timer.unref();
 }
 
 /* ------------------------------------------------------------------ results */
-function resolve(m, reason) {
+const outcomeWord = (o) => (o === 1 ? 'win' : o === -1 ? 'loss' : 'draw');
+
+function resolve(m) {
   if (m.done) return;
   m.done = true;
   clearTimeout(m.timer);
   matches.delete(m.id);
+
   const [A, B] = m.players;
-  const score = (x) => (x && x.res !== null && !x.forfeit && !x.flagged ? x.res : null);
-  let sa = score(A), sb = B ? score(B) : m.bot.score;
+  const out_ = (x) => x.forfeit || x.flagged;
+  const score = (x) => (x && x.res !== null && !out_(x) ? x.res : null);
+  const sa = score(A);
+  const sb = B ? score(B) : m.bot.score;
+
   /* outcome from A's point of view: 1 win, 0 draw, -1 loss */
   let out;
   if (B) {
-    const aOut = A.forfeit || A.flagged, bOut = B.forfeit || B.flagged;
-    if (aOut && bOut) out = 0;
-    else if (aOut) out = -1;
-    else if (bOut) out = 1;
+    if (out_(A) && out_(B)) out = 0;
+    else if (out_(A)) out = -1;
+    else if (out_(B)) out = 1;
     else if (sa === null && sb === null) out = 0;
     else if (sa === null) out = -1;
     else if (sb === null) out = 1;
     else out = sa > sb ? 1 : sa < sb ? -1 : 0;
   } else {
-    if (A.forfeit || A.flagged || sa === null) out = -1;
-    else out = sa > sb ? 1 : sa < sb ? -1 : 0;
+    out = out_(A) || sa === null ? -1 : sa > sb ? 1 : sa < sb ? -1 : 0;
   }
-  const finalize = (me, o, oppScore, oppName, bot, why) => {
+
+  const why = (self, other) => {
+    if (self.flagged) return 'invalid';
+    if (self.forfeit) return 'you_left';
+    if (other && other.flagged) return 'opp_invalid';
+    if (other && other.forfeit) return 'opp_left';
+    if (self.res === null) return 'timeout';
+    if (other && other.res === null) return 'opp_timeout';
+    return 'score';
+  };
+
+  const finalize = (me, o, oppScore, oppName, bot, reason) => {
     const p = store.get(me.id);
     const before = p.crowns;
     const payout = o === 1 ? m.stake * 2 : o === 0 ? m.stake : 0;
     p.coins += payout;
     p.escrow = null;
-    if (o === 1) { p.wins++; p.crowns += 3; } else if (o === -1) { p.losses++; p.crowns = Math.max(0, p.crowns - 1); }
+    if (o === 1) {
+      p.wins++; p.streak++;
+      p.bestStreak = Math.max(p.bestStreak, p.streak);
+      p.crowns += rules.winCrowns(p.streak);
+    } else if (o === -1) {
+      p.losses++; p.streak = 0;
+      p.crowns = Math.max(0, p.crowns - rules.LOSS_CROWNS);
+    } else {
+      p.draws++;
+    }
     const mine = score(me);
-    if (mine !== null && (p.best[m.game] === undefined || mine > p.best[m.game])) p.best[m.game] = mine;
+    const newBest = mine !== null && (p.best[m.game] === undefined || mine > p.best[m.game]);
+    if (newBest) p.best[m.game] = mine;
+    p.history.unshift({
+      at: now(), game: m.game, stake: m.stake, outcome: outcomeWord(o),
+      you: mine, opp: oppScore, oppName, bot, net: payout - m.stake,
+    });
+    p.history.length = Math.min(p.history.length, rules.HISTORY_LEN);
     playerMatch.delete(me.id);
+
     const msg = {
       t: 'result', mid: m.id, game: m.game, stake: m.stake, you: mine, opp: oppScore, oppName, bot,
-      outcome: o === 1 ? 'win' : o === -1 ? 'loss' : 'draw', reason: why, payout, net: payout - m.stake,
-      crownsBefore: before, crownsAfter: p.crowns, crownDelta: p.crowns - before, best: p.best[m.game], me: view(p),
+      outcome: outcomeWord(o), reason, payout, net: payout - m.stake,
+      crownsBefore: before, crownsAfter: p.crowns, crownDelta: p.crowns - before,
+      streak: p.streak, best: p.best[m.game], newBest, rematch: !bot && !!B ? REMATCH_MS : 0, me: view(p),
     };
     if (!sendTo(me.id, msg)) p.pending = msg; /* shown next time they connect */
   };
-  const nameOf = (x) => (x ? store.get(x.id).name : m.bot.name);
+
+  const nameOf = (x) => store.get(x.id).name;
   if (B) {
-    const whyFor = (self, other) => (self.flagged ? 'invalid' : self.forfeit ? 'you_left' : other.flagged ? 'opp_invalid' : other.forfeit ? 'opp_left' : (score(self) === null ? 'you_timeout' : score(other) === null ? 'opp_timeout' : 'normal'));
-    finalize(A, out, sb, nameOf(B), false, whyFor(A, B));
-    finalize(B, -out, sa, nameOf(A), false, whyFor(B, A));
+    finalize(A, out, sb, nameOf(B), false, why(A, B));
+    finalize(B, -out, sa, nameOf(A), false, why(B, A));
+    openRematch(m, A.id, B.id);
   } else {
-    finalize(A, out, m.bot.score, m.bot.name, true, A.flagged ? 'invalid' : A.forfeit ? 'you_left' : sa === null ? 'you_timeout' : 'normal');
+    finalize(A, out, m.bot.score, m.bot.name, true, why(A, null));
   }
   store.touch();
-  broadcastOnline(false);
 }
 
 function handleResult(s, msg) {
@@ -271,21 +346,22 @@ function handleResult(s, msg) {
   if (!m || m.id !== msg.mid || m.done) return fail(s, 'no_match', 'That match is over.');
   const me = m.players.find((x) => x.id === s.id);
   if (me.res !== null || me.forfeit || me.flagged) return;
-  const score = msg.score;
-  if (!rules.plausible(m.game, score, now() - m.startAt)) {
+
+  if (!rules.plausible(m.game, msg.score, now() - m.startAt)) {
     me.flagged = true;
-    console.warn('Rejected score', score, 'for', m.game, 'after', now() - m.startAt, 'ms');
-    return resolve(m, 'invalid');
+    console.warn('Rejected score', msg.score, 'for', m.game, 'after', now() - m.startAt, 'ms');
+    return resolve(m);
   }
-  me.res = score;
-  if (m.bot) return resolve(m, 'done');
+  me.res = msg.score;
+  if (m.bot) return resolve(m);
+
   const other = m.players.find((x) => x.id !== s.id);
-  if (other.res !== null || other.forfeit) return resolve(m, 'done');
+  if (other.res !== null || other.forfeit || other.flagged) return resolve(m);
+
   /* tell the other player the number to beat, and start their clock */
-  m.firstDoneAt = now();
   m.deadline = Math.min(m.hard, now() + GRACE_MS);
   armDeadline(m);
-  sendTo(other.id, { t: 'opp_done', mid: m.id, score, deadlineIn: m.deadline - now() });
+  sendTo(other.id, { t: 'opp_done', mid: m.id, score: msg.score, deadlineIn: m.deadline - now() });
 }
 
 function handleProgress(s, msg) {
@@ -305,9 +381,53 @@ function handleForfeit(s, msg) {
   const m = playerMatch.get(s.id);
   if (!m || m.id !== msg.mid || m.done) return;
   const me = m.players.find((x) => x.id === s.id);
-  if (me.res !== null) { sendWs(s.ws, { t: 'waiting', mid: m.id }); return; } /* already finished: just waiting for the other side */
+  if (me.res !== null) return sendWs(s.ws, { t: 'waiting', mid: m.id }); /* already finished */
   me.forfeit = true;
-  resolve(m, 'forfeit');
+  resolve(m);
+}
+
+/* ------------------------------------------------------------------ rematch */
+function openRematch(m, a, b) {
+  const offer = { mid: m.id, ids: [a, b], game: m.game, stake: m.stake, want: new Set(), timer: null };
+  offer.timer = setTimeout(() => closeRematch(offer, 'expired'), REMATCH_MS);
+  if (offer.timer.unref) offer.timer.unref();
+  offers.set(m.id, offer);
+  for (const id of offer.ids) {
+    const old = offerOf.get(id);
+    if (old && old !== offer) closeRematch(old, 'gone');
+    offerOf.set(id, offer);
+  }
+}
+
+function closeRematch(offer, why) {
+  if (offers.get(offer.mid) !== offer) return;
+  offers.delete(offer.mid);
+  clearTimeout(offer.timer);
+  for (const id of offer.ids) {
+    if (offerOf.get(id) === offer) offerOf.delete(id);
+    if (why !== 'started') sendTo(id, { t: 'rematch_off', mid: offer.mid, why });
+  }
+}
+
+function dropRematch(id) {
+  const offer = offerOf.get(id);
+  if (offer) closeRematch(offer, 'declined');
+}
+
+function handleRematch(s, msg) {
+  const offer = offers.get(msg.mid);
+  if (!offer || !offer.ids.includes(s.id)) return fail(s, 'no_rematch', 'That rematch is no longer available.');
+  if (busy(s.id)) return fail(s, 'busy', 'Finish what you are doing first.');
+  if (store.get(s.id).coins < offer.stake) return fail(s, 'no_coins', 'Not enough coins for a rematch.');
+  offer.want.add(s.id);
+  const other = offer.ids.find((x) => x !== s.id);
+  if (offer.want.size === 2) {
+    closeRematch(offer, 'started');
+    return createMatch(offer.ids[0], offer.ids[1], offer.game, offer.stake);
+  }
+  if (!sessions.has(other)) return closeRematch(offer, 'gone');
+  sendTo(other, { t: 'rematch_offer', mid: offer.mid, name: store.get(s.id).name, stake: offer.stake, game: offer.game });
+  sendWs(s.ws, { t: 'rematch_wait', mid: offer.mid });
 }
 
 /* ------------------------------------------------------------------ rooms */
@@ -320,116 +440,63 @@ function newCode() {
   return null;
 }
 
-/* ------------------------------------------------------------------ message handling */
-function validGame(g) { return typeof g === 'string' && rules.GAMES.includes(g); }
-function validStake(x) { return Number.isInteger(x) && rules.STAKES.includes(x); }
-
-function handle(s, msg) {
-  if (msg.t === 'ping') return sendWs(s.ws, { t: 'pong' });
-  if (msg.t === 'hello') return handleHello(s, msg);
-  if (!s.id) return fail(s, 'hello_first', 'Say hello first.');
-  const p = store.get(s.id);
-  switch (msg.t) {
-    case 'queue': {
-      if (!validGame(msg.game) || !validStake(msg.stake)) return fail(s, 'bad_request', 'Pick a game and a stake.');
-      if (busy(s.id)) return fail(s, 'busy', 'Finish what you are doing first.');
-      if (p.coins < msg.stake) return fail(s, 'no_coins', 'Not enough coins for that stake.');
-      return enqueue(s, msg.game, msg.stake);
-    }
-    case 'bot': {
-      if (!validGame(msg.game) || !validStake(msg.stake)) return fail(s, 'bad_request', 'Pick a game and a stake.');
-      if (busy(s.id)) return fail(s, 'busy', 'Finish what you are doing first.');
-      if (p.coins < msg.stake) return fail(s, 'no_coins', 'Not enough coins for that stake.');
-      return createBotMatch(s, msg.game, msg.stake);
-    }
-    case 'google': {
-      if (!GOOGLE_CLIENT_ID) return fail(s, 'google_off', 'Google sign-in is not set up on this server.');
-      if (busy(s.id)) return fail(s, 'busy', 'Finish what you are doing first.');
-      return handleGoogle(s, msg.credential);
-    }
-    case 'cancel': {
-      leaveQueues(s.id);
-      return sendWs(s.ws, { t: 'cancelled' });
-    }
-    case 'room_create': {
-      if (!validGame(msg.game) || !validStake(msg.stake)) return fail(s, 'bad_request', 'Pick a game and a stake.');
-      if (busy(s.id)) return fail(s, 'busy', 'Finish what you are doing first.');
-      if (p.coins < msg.stake) return fail(s, 'no_coins', 'Not enough coins for that stake.');
-      if (rooms.size >= 5000) return fail(s, 'busy', 'Too many open rooms right now.');
-      const code = newCode();
-      if (!code) return fail(s, 'busy', 'Try again in a moment.');
-      const room = { code, hostId: s.id, game: msg.game, stake: msg.stake, timer: null };
-      room.timer = setTimeout(() => {
-        if (rooms.get(code) === room) { rooms.delete(code); roomByHost.delete(room.hostId); sendTo(room.hostId, { t: 'error', code: 'room_expired', msg: 'That room expired.' }); }
-      }, ROOM_TTL_MS);
-      if (room.timer.unref) room.timer.unref();
-      rooms.set(code, room);
-      roomByHost.set(s.id, room);
-      return sendWs(s.ws, { t: 'room', code, game: room.game, stake: room.stake });
-    }
-    case 'room_join': {
-      const code = typeof msg.code === 'string' ? msg.code.trim().toUpperCase() : '';
-      if (!/^[A-Z0-9]{4}$/.test(code)) return fail(s, 'bad_code', 'Room codes are 4 letters or numbers.');
-      const room = rooms.get(code);
-      if (room && room.hostId === s.id) return fail(s, 'own_room', 'That is your own room. Share the code with a friend.');
-      if (busy(s.id)) return fail(s, 'busy', 'Finish what you are doing first.');
-      if (!room || !sessions.has(room.hostId)) return fail(s, 'no_room', 'No open room with that code.');
-      if (p.coins < room.stake) return fail(s, 'no_coins', 'You need ' + room.stake + ' coins to join that room.');
-      if (store.get(room.hostId).coins < room.stake) return fail(s, 'no_room', 'The host no longer has enough coins.');
-      rooms.delete(code); roomByHost.delete(room.hostId); clearTimeout(room.timer);
-      return createMatch(room.hostId, s.id, room.game, room.stake);
-    }
-    case 'progress': return handleProgress(s, msg);
-    case 'result': return handleResult(s, msg);
-    case 'forfeit': return handleForfeit(s, msg);
-    case 'name': {
-      p.name = cleanName(msg.name);
-      store.touch();
-      return sendWs(s.ws, { t: 'me', me: view(p) });
-    }
-    case 'claim': {
-      const left = p.daily + DAY - now();
-      if (left > 0) return fail(s, 'daily_wait', 'Your daily bonus is not ready yet.', { me: view(p) });
-      p.coins += 100; p.daily = now();
-      store.touch();
-      return sendWs(s.ws, { t: 'me', me: view(p) });
-    }
-    case 'refill': {
-      if (p.coins >= rules.STAKES[0]) return fail(s, 'no_need', 'You still have enough coins to play.');
-      const wait = p.refillAt + 5 * 60000 - now();
-      if (wait > 0) return fail(s, 'refill_wait', 'You can refill again in ' + Math.ceil(wait / 60000) + ' min.');
-      p.coins += 500; p.refillAt = now();
-      store.touch();
-      return sendWs(s.ws, { t: 'me', me: view(p) });
-    }
-    case 'reset': {
-      if (busy(s.id)) return fail(s, 'busy', 'Finish what you are doing first.');
-      p.coins = 500; p.crowns = 0; p.wins = 0; p.losses = 0; p.best = {};
-      store.touch();
-      return sendWs(s.ws, { t: 'me', me: view(p) });
-    }
-    case 'ladder': return sendWs(s.ws, Object.assign({ t: 'ladder' }, ladder(s.id)));
-    default: return fail(s, 'bad_request', 'Unknown message.');
-  }
+function createRoom(s, game, stake) {
+  if (rooms.size >= 5000) return fail(s, 'busy', 'Too many open rooms right now.');
+  const code = newCode();
+  if (!code) return fail(s, 'busy', 'Try again in a moment.');
+  const room = { code, hostId: s.id, game, stake, timer: null };
+  room.timer = setTimeout(() => {
+    if (rooms.get(code) !== room) return;
+    rooms.delete(code);
+    roomByHost.delete(room.hostId);
+    sendTo(room.hostId, { t: 'cancelled', why: 'room_expired' });
+  }, ROOM_TTL_MS);
+  if (room.timer.unref) room.timer.unref();
+  rooms.set(code, room);
+  roomByHost.set(s.id, room);
+  sendWs(s.ws, { t: 'room', code, game, stake });
 }
 
+function joinRoom(s, p, raw) {
+  const code = typeof raw === 'string' ? raw.trim().toUpperCase() : '';
+  if (!/^[A-Z0-9]{4}$/.test(code)) return fail(s, 'bad_code', 'Room codes are 4 letters or numbers.');
+  const room = rooms.get(code);
+  if (room && room.hostId === s.id) return fail(s, 'own_room', 'That is your own room. Share the code with a friend.');
+  if (busy(s.id)) return fail(s, 'busy', 'Finish what you are doing first.');
+  if (!room || !sessions.has(room.hostId)) return fail(s, 'no_room', 'No open room with that code.');
+  if (p.coins < room.stake) return fail(s, 'no_coins', 'You need ' + room.stake + ' coins to join that room.');
+  if (store.get(room.hostId).coins < room.stake) return fail(s, 'no_room', 'The host no longer has enough coins.');
+  rooms.delete(code);
+  roomByHost.delete(room.hostId);
+  clearTimeout(room.timer);
+  createMatch(room.hostId, s.id, room.game, room.stake);
+}
+
+/* ------------------------------------------------------------------ ladder */
 let ladderCache = { at: 0, rows: [] };
+
 function ladder(myId) {
   if (now() - ladderCache.at > 5000) {
     const rows = [];
-    for (const [id, p] of store.players) if (p.wins + p.losses > 0) rows.push({ id, name: p.name, crowns: p.crowns, wins: p.wins });
+    for (const [id, p] of store.players) {
+      if (p.wins + p.losses + p.draws > 0) rows.push({ id, name: p.name, crowns: p.crowns, wins: p.wins, streak: p.streak });
+    }
     rows.sort((a, b) => b.crowns - a.crowns || b.wins - a.wins || (a.name < b.name ? -1 : 1));
     ladderCache = { at: now(), rows };
   }
   const rows = ladderCache.rows;
-  const top = rows.slice(0, 25).map((r, i) => ({ pos: i + 1, name: r.name, crowns: r.crowns, league: rules.LEAGUES[rules.leagueIdx(r.crowns)][0], me: r.id === myId }));
+  const top = rows.slice(0, 25).map((r, i) => ({
+    pos: i + 1, name: r.name, crowns: r.crowns, league: leagueName(r.crowns), streak: r.streak, me: r.id === myId,
+  }));
   const idx = rows.findIndex((r) => r.id === myId);
   return { rows: top, rank: idx >= 0 ? idx + 1 : null, total: rows.length, online: onlineCount() };
 }
 
+/* ------------------------------------------------------------------ accounts */
 function handleHello(s, msg) {
   if (s.id) return;
   let key = msg.key, id, p, isNew = false;
+
   if (key !== undefined && key !== null) {
     if (typeof key !== 'string' || !KEY_RE.test(key)) return fail(s, 'bad_key', 'That account key is not valid.');
     id = store.resolve(hashKey(key));
@@ -438,13 +505,17 @@ function handleHello(s, msg) {
   } else {
     const hits = pruneHits(ipNewAccounts.get(s.ip) || [], 3600000);
     ipNewAccounts.set(s.ip, hits);
-    if (hits.length >= MAX_NEW_ACCOUNTS_PER_HOUR) { fail(s, 'rate', 'Too many new accounts from your network. Try again later.'); return s.ws.close(1008, 'rate'); }
+    if (hits.length >= MAX_NEW_ACCOUNTS_PER_HOUR) {
+      fail(s, 'rate', 'Too many new accounts from your network. Try again later.');
+      return s.ws.close(1008, 'rate');
+    }
     hits.push(now());
     key = crypto.randomBytes(32).toString('base64url');
     id = hashKey(key);
     p = store.create(id, cleanName(msg.name));
     isNew = true;
   }
+
   /* one open tab per account: the newest takes over */
   const old = sessions.get(id);
   if (old && old.ws !== s.ws) {
@@ -454,16 +525,21 @@ function handleHello(s, msg) {
     sessions.delete(id);
     try { old.ws.close(4000, 'replaced'); } catch (e) { /* already closed */ }
   }
+
   s.id = id;
   sessions.set(id, s);
   p.seen = now();
-  const m = playerMatch.get(id);
-  const welcome = { t: 'welcome', v: 1, me: view(p), online: onlineCount(), stakes: rules.STAKES };
+
+  const welcome = { t: 'welcome', v: 2, me: view(p), online: onlineCount(), stakes: rules.STAKES };
   if (isNew) welcome.key = key;
+  const m = playerMatch.get(id);
   if (m) {
     const mine = m.players.find((x) => x.id === id);
     const other = m.players.find((x) => x.id !== id);
-    welcome.active = { mid: m.id, game: m.game, stake: m.stake, finished: mine.res !== null, bot: !!m.bot, oppName: other ? store.get(other.id).name : m.bot.name };
+    welcome.active = {
+      mid: m.id, game: m.game, stake: m.stake, finished: mine.res !== null, bot: !!m.bot,
+      oppName: other ? store.get(other.id).name : m.bot.name,
+    };
   }
   if (p.pending) { welcome.pending = p.pending; p.pending = null; store.touch(); }
   sendWs(s.ws, welcome);
@@ -472,8 +548,11 @@ function handleHello(s, msg) {
 
 async function handleGoogle(s, credential) {
   let g;
-  try { g = await auth.verifyGoogleIdToken(credential, { clientId: GOOGLE_CLIENT_ID, fetchJwks: jwksFetcher || undefined }); }
-  catch (e) { return fail(s, 'google_bad', 'Google sign-in could not be verified. Try again.'); }
+  try {
+    g = await auth.verifyGoogleIdToken(credential, { clientId: GOOGLE_CLIENT_ID, fetchJwks: jwksFetcher || undefined });
+  } catch (e) {
+    return fail(s, 'google_bad', 'Google sign-in could not be verified. Try again.');
+  }
   if (!s.id || sessions.get(s.id) !== s || playerMatch.has(s.id)) return;
   const existing = store.googleIndex.get(g.sub);
   const me = store.get(s.id);
@@ -488,12 +567,94 @@ async function handleGoogle(s, credential) {
   sendWs(s.ws, { t: 'switch', key });
 }
 
+/* ------------------------------------------------------------------ message handling */
+function guardStart(s, p, game, stake) {
+  if (!validGame(game) || !validStake(stake)) { fail(s, 'bad_request', 'Pick a game and a stake.'); return false; }
+  if (busy(s.id)) { fail(s, 'busy', 'Finish what you are doing first.'); return false; }
+  if (p.coins < stake) { fail(s, 'no_coins', 'Not enough coins for that stake.'); return false; }
+  return true;
+}
+
+function handle(s, msg) {
+  if (msg.t === 'ping') return sendWs(s.ws, { t: 'pong' });
+  if (msg.t === 'hello') return handleHello(s, msg);
+  if (!s.id) return fail(s, 'hello_first', 'Say hello first.');
+  const p = store.get(s.id);
+
+  switch (msg.t) {
+    case 'queue':
+      if (!guardStart(s, p, msg.game, msg.stake)) return;
+      dropRematch(s.id);
+      return enqueue(s, msg.game, msg.stake);
+    case 'bot':
+      if (!guardStart(s, p, msg.game, msg.stake)) return;
+      dropRematch(s.id);
+      return createBotMatch(s, msg.game, msg.stake);
+    case 'room_create':
+      if (!guardStart(s, p, msg.game, msg.stake)) return;
+      dropRematch(s.id);
+      return createRoom(s, msg.game, msg.stake);
+    case 'room_join':
+      dropRematch(s.id);
+      return joinRoom(s, p, msg.code);
+    case 'cancel':
+      leaveQueues(s.id);
+      return sendWs(s.ws, { t: 'cancelled' });
+    case 'progress': return handleProgress(s, msg);
+    case 'result': return handleResult(s, msg);
+    case 'forfeit': return handleForfeit(s, msg);
+    case 'rematch': return handleRematch(s, msg);
+    case 'rematch_no': {
+      const offer = offers.get(msg.mid);
+      if (offer && offer.ids.includes(s.id)) closeRematch(offer, 'declined');
+      return;
+    }
+    case 'name':
+      p.name = cleanName(msg.name);
+      store.touch();
+      return sendWs(s.ws, { t: 'me', me: view(p) });
+    case 'claim': {
+      if (p.daily + DAY - now() > 0) return fail(s, 'daily_wait', 'Your daily bonus is not ready yet.', { me: view(p) });
+      p.coins += rules.DAILY_COINS;
+      p.daily = now();
+      store.touch();
+      return sendWs(s.ws, { t: 'me', me: view(p), gift: rules.DAILY_COINS });
+    }
+    case 'refill': {
+      if (p.coins >= rules.STAKES[0]) return fail(s, 'no_need', 'You still have enough coins to play.');
+      const wait = p.refillAt + rules.REFILL_EVERY_MS - now();
+      if (wait > 0) return fail(s, 'refill_wait', 'You can refill again in ' + Math.ceil(wait / 60000) + ' min.');
+      p.coins += rules.REFILL_COINS;
+      p.refillAt = now();
+      store.touch();
+      return sendWs(s.ws, { t: 'me', me: view(p), gift: rules.REFILL_COINS });
+    }
+    case 'reset':
+      if (busy(s.id)) return fail(s, 'busy', 'Finish what you are doing first.');
+      Object.assign(p, {
+        coins: rules.START_COINS, crowns: 0, wins: 0, losses: 0, draws: 0,
+        streak: 0, bestStreak: 0, best: {}, history: [],
+      });
+      store.touch();
+      return sendWs(s.ws, { t: 'me', me: view(p) });
+    case 'ladder':
+      return sendWs(s.ws, Object.assign({ t: 'ladder' }, ladder(s.id)));
+    case 'google':
+      if (!GOOGLE_CLIENT_ID) return fail(s, 'google_off', 'Google sign-in is not set up on this server.');
+      if (busy(s.id)) return fail(s, 'busy', 'Finish what you are doing first.');
+      return handleGoogle(s, msg.credential);
+    default:
+      return fail(s, 'bad_request', 'Unknown message.');
+  }
+}
+
 function onClose(s) {
   const n = (ipConns.get(s.ip) || 1) - 1;
   if (n <= 0) ipConns.delete(s.ip); else ipConns.set(s.ip, n);
   if (s.id && sessions.get(s.id) === s) {
     sessions.delete(s.id);
     leaveQueues(s.id);
+    dropRematch(s.id);
     broadcastOnline(false);
   }
 }
@@ -504,9 +665,10 @@ const MIME = {
   '.json': 'application/json; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon',
   '.txt': 'text/plain; charset=utf-8', '.webmanifest': 'application/manifest+json',
 };
+
 const CSP = [
   "default-src 'self'",
-  "script-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com https://accounts.google.com",
+  "script-src 'self' https://cdnjs.cloudflare.com https://accounts.google.com",
   "frame-src https://accounts.google.com",
   "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://accounts.google.com",
   "font-src https://fonts.gstatic.com",
@@ -517,37 +679,52 @@ const CSP = [
   "form-action 'none'",
 ].join('; ');
 
-const httpServer = http.createServer((req, res) => {
-  const headers = {
+function baseHeaders() {
+  return {
     'X-Content-Type-Options': 'nosniff',
     'Referrer-Policy': 'no-referrer',
+    'Permissions-Policy': 'camera=(), microphone=(), geolocation=()',
     'Content-Security-Policy': CSP,
   };
-  if (req.method !== 'GET' && req.method !== 'HEAD') { res.writeHead(405, Object.assign({ Allow: 'GET, HEAD' }, headers)); return res.end(); }
+}
+
+const httpServer = http.createServer((req, res) => {
+  const headers = baseHeaders();
+  const reply = (code, type, body, extra) => {
+    res.writeHead(code, Object.assign({ 'Content-Type': type }, headers, extra || {}));
+    res.end(req.method === 'HEAD' ? undefined : body);
+  };
+  if (req.method !== 'GET' && req.method !== 'HEAD') return reply(405, 'text/plain', 'Method not allowed', { Allow: 'GET, HEAD' });
+
   let pathname;
-  try { pathname = decodeURIComponent(new URL(req.url, 'http://x').pathname); } catch (e) { res.writeHead(400, headers); return res.end('Bad request'); }
-  if (pathname === '/healthz') { res.writeHead(200, Object.assign({ 'Content-Type': 'text/plain' }, headers)); return res.end('ok'); }
-  const base = (process.env.PUBLIC_URL || '').replace(/\/+$/, '');
+  try { pathname = decodeURIComponent(new URL(req.url, 'http://x').pathname); } catch (e) { return reply(400, 'text/plain', 'Bad request'); }
+
+  const base = env('PUBLIC_URL', '').replace(/\/+$/, '');
+  if (pathname === '/healthz') return reply(200, 'text/plain', 'ok');
   if (pathname === '/config.json') {
-    res.writeHead(200, Object.assign({ 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-cache' }, headers));
-    return res.end(JSON.stringify({ googleClientId: GOOGLE_CLIENT_ID || null }));
+    return reply(200, 'application/json; charset=utf-8', JSON.stringify({ googleClientId: GOOGLE_CLIENT_ID || null }), { 'Cache-Control': 'no-cache' });
   }
   if (pathname === '/robots.txt') {
-    res.writeHead(200, Object.assign({ 'Content-Type': 'text/plain; charset=utf-8' }, headers));
-    return res.end('User-agent: *\nAllow: /\n' + (base ? 'Sitemap: ' + base + '/sitemap.xml\n' : ''));
+    return reply(200, 'text/plain; charset=utf-8', 'User-agent: *\nAllow: /\n' + (base ? 'Sitemap: ' + base + '/sitemap.xml\n' : ''));
   }
   if (pathname === '/sitemap.xml' && base) {
-    res.writeHead(200, Object.assign({ 'Content-Type': 'application/xml; charset=utf-8' }, headers));
-    return res.end('<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"><url><loc>' + base + '/</loc></url></urlset>\n');
+    return reply(200, 'application/xml; charset=utf-8',
+      '<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"><url><loc>' +
+      base + '/</loc></url></urlset>\n');
   }
+
   if (pathname === '/') pathname = '/index.html';
   const file = path.normalize(path.join(PUBLIC_DIR, pathname));
-  if (file !== PUBLIC_DIR && !file.startsWith(PUBLIC_DIR + path.sep)) { res.writeHead(404, headers); return res.end('Not found'); }
+  if (file !== PUBLIC_DIR && !file.startsWith(PUBLIC_DIR + path.sep)) return reply(404, 'text/plain', 'Not found');
+
   fs.stat(file, (err, st) => {
-    if (err || !st.isFile()) { res.writeHead(404, Object.assign({ 'Content-Type': 'text/plain' }, headers)); return res.end('Not found'); }
+    if (err || !st.isFile()) return reply(404, 'text/plain', 'Not found');
     const ext = path.extname(file).toLowerCase();
-    const h = Object.assign({ 'Content-Type': MIME[ext] || 'application/octet-stream', 'Content-Length': st.size, 'Cache-Control': ext === '.html' ? 'no-cache' : 'public, max-age=3600' }, headers);
-    res.writeHead(200, h);
+    res.writeHead(200, Object.assign({
+      'Content-Type': MIME[ext] || 'application/octet-stream',
+      'Content-Length': st.size,
+      'Cache-Control': ext === '.html' ? 'no-cache' : 'public, max-age=300',
+    }, headers));
     if (req.method === 'HEAD') return res.end();
     fs.createReadStream(file).pipe(res);
   });
@@ -557,14 +734,20 @@ const httpServer = http.createServer((req, res) => {
 const wss = new WebSocketServer({ server: httpServer, path: '/ws', maxPayload: 4096 });
 
 wss.on('connection', (ws, req) => {
+  ws.isAlive = true;
+  ws.on('pong', () => { ws.isAlive = true; });
+
   const ip = clientIp(req);
   const count = (ipConns.get(ip) || 0) + 1;
   ipConns.set(ip, count);
   const s = { ws, ip, id: null, tokens: 80, refillAt: now(), replaced: false };
   if (count > MAX_CONN_PER_IP) { ws.close(1013, 'busy'); onClose(s); return; }
+
   const helloTimer = setTimeout(() => { if (!s.id) ws.close(1008, 'hello timeout'); }, 10000);
+
   ws.on('message', (data, isBinary) => {
     if (isBinary) return;
+    /* token bucket: 40 messages a second, bursts of 80 */
     const t = now();
     s.tokens = Math.min(80, s.tokens + ((t - s.refillAt) / 1000) * 40);
     s.refillAt = t;
@@ -586,22 +769,22 @@ const heartbeat = setInterval(() => {
   }
 }, 25000);
 heartbeat.unref();
-wss.on('connection', (ws) => { ws.isAlive = true; ws.on('pong', () => { ws.isAlive = true; }); });
 
 /* ------------------------------------------------------------------ start and stop */
 function start(port) {
-  return new Promise((resolveStart) => {
-    httpServer.listen(port === undefined ? PORT : port, HOST, () => resolveStart(httpServer.address().port));
+  return new Promise((ok) => {
+    httpServer.listen(port === undefined ? PORT : port, HOST, () => ok(httpServer.address().port));
   });
 }
 
 function stop() {
-  return new Promise((resolveStop) => {
+  return new Promise((ok) => {
     clearInterval(heartbeat);
     store.flush();
     for (const ws of wss.clients) ws.terminate();
     for (const m of matches.values()) clearTimeout(m.timer);
-    wss.close(() => httpServer.close(() => resolveStop()));
+    for (const o of offers.values()) clearTimeout(o.timer);
+    wss.close(() => httpServer.close(() => ok()));
   });
 }
 

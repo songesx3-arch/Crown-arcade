@@ -1,12 +1,12 @@
 {
   "name": "crown-arcade-online",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "private": true,
   "description": "Real-time 1v1 skill duels with virtual coins: Node server, WebSocket matchmaking, browser client.",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "test": "node --test"
+    "test": "node --test test/*.test.js"
   },
   "engines": {
     "node": ">=18"
