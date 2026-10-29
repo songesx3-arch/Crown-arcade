@@ -723,7 +723,7 @@ const httpServer = http.createServer((req, res) => {
     res.writeHead(200, Object.assign({
       'Content-Type': MIME[ext] || 'application/octet-stream',
       'Content-Length': st.size,
-      'Cache-Control': ext === '.html' ? 'no-cache' : 'public, max-age=300',
+      'Cache-Control': 'no-cache',
     }, headers));
     if (req.method === 'HEAD') return res.end();
     fs.createReadStream(file).pipe(res);

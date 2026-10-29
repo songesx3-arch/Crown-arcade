@@ -189,9 +189,11 @@
     K.rb(0.16, 0.12, 0.18, 0.04, 0xffab1f, 0, 0.88, -0.38, body);
     K.rb(0.1, 0.12, 0.08, 0.03, 0xff4b6e, 0, 0.74, -0.33, body);
     [-0.2, 0.2].forEach(function (x) { K.rb(0.08, 0.1, 0.06, 0.02, 0x14102e, x, 0.98, -0.3, body); });
-    [-0.36, 0.36].forEach(function (x) { K.rb(0.08, 0.3, 0.4, 0.04, 0xeee6d2, x, 0.5, 0.04, body); });
+    var wings = [];
+    [-0.36, 0.36].forEach(function (x) { wings.push(K.rb(0.08, 0.3, 0.4, 0.04, 0xeee6d2, x, 0.5, 0.04, body)); });
     K.rb(0.36, 0.22, 0.14, 0.05, 0xeee6d2, 0, 0.66, 0.36, body);
-    [-0.14, 0.14].forEach(function (x) { K.rb(0.07, 0.2, 0.07, 0.02, 0xffab1f, x, 0.1, 0, body); });
+    var legs = [];
+    [-0.14, 0.14].forEach(function (x) { legs.push(K.rb(0.07, 0.2, 0.07, 0.02, 0xffab1f, x, 0.1, 0, body)); });
     hero.add(body);
     scene.add(hero);
     var shadow = K.mesh(K.geo('hopShadow', function () { return new THREE.PlaneGeometry(0.9, 0.9); }), own(K.blobMaterial(0.35)), 0, 0.02, 0, scene);
@@ -322,6 +324,18 @@
       var idle = !over && hopT <= 0 ? Math.sin(t * 6) * 0.035 : 0; /* breathing bob while waiting */
       var st = 1 + Math.sin(prog * Math.PI) * 0.16 + idle, sq = Math.max(0.86, 2 - st);
       body.scale.set(sq, st, sq);
+      /* running: legs scissor, wings flap, body leans into each hop */
+      var hopping = hopT > 0, ph = t * (hopping ? 34 : 5);
+      legs.forEach(function (lg, k) {
+        var s2 = Math.sin(ph + k * Math.PI);
+        lg.rotation.x = s2 * (hopping ? 1.1 : 0.12);
+        lg.position.y = 0.1 + Math.max(0, s2) * (hopping ? 0.12 : 0.01);
+      });
+      wings.forEach(function (wg, k) {
+        var sg = k === 0 ? 1 : -1;
+        wg.rotation.z = sg * (hopping ? 0.35 + Math.abs(Math.sin(t * 38)) * 0.9 : 0.12 + Math.sin(t * 6) * 0.1);
+      });
+      body.rotation.x = -0.32 * Math.sin(prog * Math.PI);
       if (over && flash > 0 && !drown) body.scale.set(1.3, 0.2, 1.3);
       if (drown) {
         hero.position.y = standY - Math.max(0, 1 - flash / 0.9) * 0.9;

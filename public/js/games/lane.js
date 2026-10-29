@@ -23,24 +23,17 @@
     function own(x) { owned.push(x); return x; }
 
     /* ---------------------------------------------------------------- sky, sun, stars */
-    var sky = own(K.gradientTexture([[0, '#0b0628'], [0.32, '#2a0f5e'], [0.5, '#8a2d82'], [0.58, '#ff7a59'], [0.6, '#2a0f5e'], [1, '#160a3a']], 256, 512, function (x, w, h) {
-      for (var i = 0; i < 90; i++) {
-        x.fillStyle = 'rgba(255,255,255,' + (0.25 + (CA.hash(i) % 60) / 100) + ')';
-        x.fillRect(CA.hash(i * 3) % w, CA.hash(i * 5) % Math.floor(h * 0.45), 1.5, 1.5);
-      }
-      var cx = w / 2, cy = h * 0.5, rad = 56;
-      var g = x.createLinearGradient(0, cy - rad, 0, cy + rad);
-      g.addColorStop(0, '#ffe38a'); g.addColorStop(0.6, '#ff5d8f'); g.addColorStop(1, '#b8329c');
-      x.save(); x.beginPath(); x.arc(cx, cy, rad, 0, Math.PI * 2); x.clip();
-      x.fillStyle = g; x.fillRect(cx - rad, cy - rad, rad * 2, rad * 2);
-      x.fillStyle = '#2a0f5e';
-      for (var s = 0; s < 6; s++) x.fillRect(cx - rad, cy + 6 + s * 9, rad * 2, 2 + s * 0.8);
-      x.restore();
+    var sky = own(K.gradientTexture([[0, '#3d9bff'], [0.3, '#79c4ff'], [0.55, '#d6f0ff'], [0.575, '#e9f7ff'], [0.585, '#6fcf6a'], [1, '#58bb55']], 256, 512, function (x, w, h) {
+      var cx = w * 0.72, cy = h * 0.3;
+      var gl = x.createRadialGradient(cx, cy, 4, cx, cy, 70);
+      gl.addColorStop(0, 'rgba(255,248,200,0.95)'); gl.addColorStop(0.35, 'rgba(255,240,170,0.45)'); gl.addColorStop(1, 'rgba(255,240,170,0)');
+      x.fillStyle = gl; x.fillRect(cx - 70, cy - 70, 140, 140);
+      x.fillStyle = '#fff6b8'; x.beginPath(); x.arc(cx, cy, 20, 0, Math.PI * 2); x.fill();
     }));
     scene.background = sky;
-    scene.fog = new THREE.Fog(0x2a0f5e, 22, 58);
-    scene.add(new THREE.HemisphereLight(0xb9a8ff, 0x2a0f5e, 0.85));
-    var key = new THREE.DirectionalLight(0xffd0e0, 0.55);
+    scene.fog = new THREE.Fog(0xcfeaff, 30, 78);
+    scene.add(new THREE.HemisphereLight(0xffffff, 0x8fcf7f, 1.0));
+    var key = new THREE.DirectionalLight(0xfff2cc, 0.8);
     key.position.set(-3, 8, 6);
     scene.add(key);
 
@@ -50,9 +43,8 @@
     var gridTex = (function () {
       var c = document.createElement('canvas'); c.width = c.height = 64;
       var x = c.getContext('2d');
-      x.fillStyle = '#150a36'; x.fillRect(0, 0, 64, 64);
-      x.strokeStyle = 'rgba(255,93,143,0.55)'; x.lineWidth = 2;
-      x.strokeRect(0, 0, 64, 64);
+      x.fillStyle = '#62cc5c'; x.fillRect(0, 0, 64, 64);
+      x.fillStyle = '#58bd53'; x.fillRect(0, 0, 64, 32);
       var t = new THREE.CanvasTexture(c);
       t.wrapS = t.wrapT = THREE.RepeatWrapping;
       t.repeat.set(40, 40);
@@ -61,18 +53,18 @@
     var ground = K.mesh(new THREE.PlaneGeometry(160, 160), own(new THREE.MeshBasicMaterial({ map: gridTex })), 0, -0.05, -50, scene);
     ground.rotation.x = -Math.PI / 2;
 
-    var road = K.mesh(new THREE.PlaneGeometry(8.2, 140), K.lam(0x221a4a), 0, 0, -50, scene);
+    var road = K.mesh(new THREE.PlaneGeometry(8.2, 140), K.lam(0x3b3f4d), 0, 0, -50, scene);
     road.rotation.x = -Math.PI / 2;
     [-1, 1].forEach(function (s) {
-      var edge = K.mesh(new THREE.BoxGeometry(0.14, 0.06, 140), K.basic(0xff5d8f), s * 4.1, 0.03, -50, scene);
+      var edge = K.mesh(new THREE.BoxGeometry(0.14, 0.06, 140), K.basic(0xffffff), s * 4.1, 0.03, -50, scene);
       edge.userData.glow = true;
-      K.mesh(new THREE.BoxGeometry(0.5, 0.25, 140), K.lam(0x3a2d78), s * 4.5, 0.12, -50, scene);
+      K.mesh(new THREE.BoxGeometry(0.5, 0.25, 140), K.lam(0xd9dbe6), s * 4.5, 0.12, -50, scene);
     });
 
     /* far mountains: a ring of low-poly cones */
     for (var mi = 0; mi < 14; mi++) {
       var mh = 4 + (CA.hash(mi * 13) % 7), mx = -60 + mi * 9.5 + (CA.hash(mi) % 5);
-      var cone = K.mesh(K.geo('mtn' + mh, function () { return new THREE.ConeGeometry(6, mh, 4); }), K.lam(0x3d1a6e), mx, mh / 2 - 0.2, -64, scene);
+      var cone = K.mesh(K.geo('mtn' + mh, function () { return new THREE.ConeGeometry(6, mh, 4); }), K.lam(0x6fbf73), mx, mh / 2 - 0.2, -64, scene);
       cone.rotation.y = Math.PI / 4;
     }
 
@@ -80,13 +72,15 @@
     var dashes = [], posts = [], i;
     var dashGeo = new THREE.BoxGeometry(0.12, 0.02, 1.4), postGeo = new THREE.BoxGeometry(0.16, 1.6, 0.16);
     for (i = 0; i < 24; i++) {
-      [-LANE / 2, LANE / 2].forEach(function (x) { dashes.push({ m: K.mesh(dashGeo, K.basic(0x5ad8ff), x, 0.02, 0, scene), i: i }); });
+      [-LANE / 2, LANE / 2].forEach(function (x) { dashes.push({ m: K.mesh(dashGeo, K.basic(0xffffff), x, 0.02, 0, scene), i: i }); });
     }
     for (i = 0; i < 12; i++) {
       [-1, 1].forEach(function (s) {
         var g = new THREE.Group();
-        K.mesh(postGeo, K.lam(0x4a3b8c), 0, 0.8, 0, g);
-        K.mesh(K.geo('lampHead', function () { return new THREE.BoxGeometry(0.34, 0.14, 0.34); }), K.basic(i % 2 ? 0x5ad8ff : 0xff5d8f), 0, 1.66, 0, g);
+        /* roadside trees */
+        K.mesh(postGeo, K.lam(0x8a5a33), 0, 0.8, 0, g);
+        K.rb(1.1, 1.0, 1.1, 0.35, i % 2 ? 0x2f9e5b : 0x46c47a, 0, 1.9, 0, g);
+        K.rb(0.7, 0.6, 0.7, 0.25, i % 2 ? 0x46c47a : 0x5fd98c, 0, 2.6, 0, g);
         g.position.x = s * 5.2;
         scene.add(g);
         posts.push({ g: g, i: i });
@@ -114,12 +108,33 @@
     var gantries = [];
     for (i = 1; i <= 9; i++) {
       var gg = new THREE.Group(), fin = false;
-      [-1, 1].forEach(function (s) { K.rb(0.3, 6, 0.3, 0.1, 0x4a3b8c, s * 4.6, 3, 0, gg); });
-      K.rb(9.6, 1.9, 0.36, 0.14, 0x2a1f60, 0, 5.3, 0, gg);
+      [-1, 1].forEach(function (s) { K.rb(0.3, 6, 0.3, 0.1, 0xb7bccd, s * 4.6, 3, 0, gg); });
+      K.rb(9.6, 1.9, 0.36, 0.14, 0x59607a, 0, 5.3, 0, gg);
       var stex = signTexture(i * 200 + ' m', fin);
       var sign = K.mesh(new THREE.PlaneGeometry(6.4, 1.6), own(new THREE.MeshBasicMaterial({ map: stex })), 0, 5.3, 0.2, gg);
       scene.add(gg);
       gantries.push({ g: gg, m: i * 200, tex: stex });
+    }
+
+    /* drifting clouds */
+    var cloudTex = (function () {
+      var c = document.createElement('canvas'); c.width = 128; c.height = 64;
+      var x = c.getContext('2d');
+      [[34, 38, 22], [60, 30, 28], [90, 38, 22], [64, 42, 26]].forEach(function (p) {
+        var g = x.createRadialGradient(p[0], p[1], 2, p[0], p[1], p[2]);
+        g.addColorStop(0, 'rgba(255,255,255,0.95)'); g.addColorStop(1, 'rgba(255,255,255,0)');
+        x.fillStyle = g; x.beginPath(); x.arc(p[0], p[1], p[2], 0, Math.PI * 2); x.fill();
+      });
+      return own(new THREE.CanvasTexture(c));
+    })();
+    var clouds = [];
+    for (i = 0; i < 7; i++) {
+      var cmat = own(new THREE.SpriteMaterial({ map: cloudTex, transparent: true, opacity: 0.9, depthWrite: false, fog: false }));
+      var cs = new THREE.Sprite(cmat);
+      cs.scale.set(16 + (i % 3) * 5, 8 + (i % 3) * 2.5, 1);
+      cs.position.set(-70 + i * 22, 16 + (i % 4) * 4, -76 + (i % 3) * 4);
+      scene.add(cs);
+      clouds.push(cs);
     }
 
     /* speed streaks */
@@ -311,6 +326,7 @@
       });
 
       tAcc += dt;
+      clouds.forEach(function (c) { c.position.x += (1.2 + spd * 0.02) * dt; if (c.position.x > 80) c.position.x = -80; });
       carWheels.forEach(function (w) { w.rotation.x -= spd * SC * dt * 3.2; });
       car.position.x = cx;
       car.position.y = over ? 0 : Math.abs(Math.sin(tAcc * 18)) * 0.025 * (0.4 + boostNow(spd)); /* engine rumble */
