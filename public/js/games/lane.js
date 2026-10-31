@@ -147,25 +147,80 @@
     }
 
     /* ---------------------------------------------------------------- the car */
-    var car = new THREE.Group(), paint = own(new THREE.MeshLambertMaterial({ color: 0x3ee6a0 })), trim = own(new THREE.MeshLambertMaterial({ color: 0x1fa877 }));
-    K.mesh(K.rbox(1.36, 0.46, 2.6, 0.2), paint, 0, 0.5, 0, car);
-    K.mesh(K.rbox(1.0, 0.36, 1.25, 0.16), K.lam(0x101a3a), 0, 0.9, 0.18, car);
-    K.mesh(K.rbox(0.94, 0.08, 0.95, 0.04), trim, 0, 1.1, 0.2, car);
-    K.mesh(K.rbox(1.42, 0.08, 0.36, 0.04), trim, 0, 1.08, 1.18, car);
-    [-0.5, 0.5].forEach(function (x) { K.mesh(K.geo('spoilerLeg', function () { return new THREE.BoxGeometry(0.06, 0.3, 0.06); }), K.lam(0x1a1240), x, 0.9, 1.18, car); });
-    K.mesh(K.geo('stripe', function () { return new THREE.BoxGeometry(0.22, 0.02, 2.3); }), K.basic(0xffffff), 0, 0.74, 0, car);
-    [-0.44, 0.44].forEach(function (x) {
-      K.mesh(K.rbox(0.34, 0.12, 0.08, 0.04), K.basic(0xff3355), x, 0.58, 1.3, car);
-      K.mesh(K.rbox(0.3, 0.12, 0.08, 0.04), K.basic(0xfff3b0), x, 0.56, -1.3, car);
+    var car = new THREE.Group(), chassis = new THREE.Group();
+    car.add(chassis);
+    var paint = own(new THREE.MeshLambertMaterial({ color: 0xffc83a })), trim = own(new THREE.MeshLambertMaterial({ color: 0xff8a1f }));
+    var glass = own(new THREE.MeshLambertMaterial({ color: 0x9fe3ff, transparent: true, opacity: 0.55 }));
+    var sphG = K.geo('laneSph', function () { return new THREE.SphereGeometry(1, 16, 12); });
+    function ball(r, mat, x, y, z, parent, sx, sy, sz) { var m = K.mesh(sphG, mat, x, y, z, parent); m.scale.set(r * (sx || 1), r * (sy || 1), r * (sz || 1)); return m; }
+    /* a chunky cartoon convertible with big googly headlight eyes, a driver, a spoiler and flames */
+    K.mesh(K.rbox(1.5, 0.5, 2.7, 0.24), paint, 0, 0.52, 0, chassis);
+    K.mesh(K.rbox(1.3, 0.24, 1.0, 0.12), paint, 0, 0.8, -0.85, chassis);
+    K.mesh(K.rbox(1.34, 0.24, 0.8, 0.12), paint, 0, 0.8, 1.0, chassis);
+    K.mesh(K.rbox(1.0, 0.2, 1.0, 0.08), K.lam(0x2a2540), 0, 0.82, 0.2, chassis);
+    K.mesh(K.rbox(0.9, 0.5, 0.14, 0.06), trim, 0, 1.02, 0.66, chassis);
+    var wsh = K.mesh(K.rbox(1.12, 0.4, 0.07, 0.03), glass, 0, 1.04, -0.36, chassis); wsh.rotation.x = 0.45;
+    K.mesh(K.rbox(0.4, 0.3, 0.3, 0.1), K.lam(0x2f7bff), 0, 0.98, 0.3, chassis);
+    ball(0.21, K.lam(0xffd2a8), 0, 1.24, 0.28, chassis);
+    K.mesh(K.rbox(0.38, 0.1, 0.38, 0.05), K.lam(0xff4757), 0, 1.42, 0.28, chassis);
+    K.mesh(K.rbox(0.3, 0.04, 0.22, 0.02), K.lam(0xff4757), 0, 1.38, 0.06, chassis);
+    K.mesh(K.rbox(0.3, 0.03, 0.9, 0.01), K.lam(0xffffff), 0, 0.93, -0.85, chassis);
+    K.mesh(K.rbox(0.3, 0.03, 0.7, 0.01), K.lam(0xffffff), 0, 0.93, 1.05, chassis);
+    K.mesh(K.rbox(1.5, 0.16, 0.22, 0.07), K.lam(0xe8edf8), 0, 0.3, -1.4, chassis);
+    K.mesh(K.rbox(0.5, 0.1, 0.06, 0.03), K.lam(0x2a2540), 0, 0.5, -1.37, chassis);
+    var pupils = [];
+    [-1, 1].forEach(function (sd) {
+      ball(0.21, K.lam(0xffffff), sd * 0.4, 0.74, -1.26, chassis, 1, 1, 0.7);
+      var pp = ball(0.1, K.basic(0x14102e), sd * 0.4, 0.74, -1.4, chassis, 1, 1.1, 0.6);
+      pp.userData.bx = sd * 0.4; pupils.push(pp);
+      K.mesh(K.rbox(0.3, 0.14, 0.08, 0.04), K.basic(0xff3355), sd * 0.5, 0.64, 1.38, chassis);
     });
+    K.mesh(K.rbox(1.7, 0.08, 0.44, 0.04), trim, 0, 1.14, 1.24, chassis);
+    [-0.55, 0.55].forEach(function (x) { K.mesh(K.rbox(0.08, 0.3, 0.1, 0.03), K.lam(0x2a2540), x, 0.96, 1.2, chassis); });
+    /* exhaust flames that grow with speed */
+    var flameGeo = K.geo('laneFlame', function () { var g = new THREE.ConeGeometry(0.15, 1, 10); g.rotateX(Math.PI / 2); g.translate(0, 0, 0.5); return g; });
+    var flames = [];
+    [[-0.32, 0xff8a1f, 1], [0.32, 0xff8a1f, 1], [-0.32, 0xfff07a, 0.55], [0.32, 0xfff07a, 0.55]].forEach(function (f) {
+      var fm = K.mesh(flameGeo, own(new THREE.MeshBasicMaterial({ color: f[1], transparent: true, opacity: 0.92 })), f[0], 0.38, 1.42, chassis);
+      fm.userData.k = f[2]; flames.push(fm);
+    });
+    /* wheels: dark tyres, light hubs with a spoke so you can see them spin; the front pair steers */
     var wheelGeo = K.geo('wheel', function () { var g = new THREE.CylinderGeometry(0.32, 0.32, 0.26, 20); g.rotateZ(Math.PI / 2); return g; });
-    var carWheels = [];
-    [[-0.68, -0.82], [0.68, -0.82], [-0.68, 0.82], [0.68, 0.82]].forEach(function (p) { carWheels.push(K.mesh(wheelGeo, K.lam(0x0b0718), p[0], 0.32, p[1], car)); });
-    var under = K.mesh(new THREE.PlaneGeometry(2, 3.2), own(new THREE.MeshBasicMaterial({ color: 0x3ee6a0, transparent: true, opacity: 0.35, depthWrite: false })), 0, 0.03, 0, car);
+    var tyreGeo = K.geo('laneTyre', function () { var g = new THREE.CylinderGeometry(0.4, 0.4, 0.32, 20); g.rotateZ(Math.PI / 2); return g; });
+    var hubGeo = K.geo('laneHub', function () { var g = new THREE.CylinderGeometry(0.22, 0.22, 0.36, 16); g.rotateZ(Math.PI / 2); return g; });
+    var spokeGeo = K.geo('laneSpoke', function () { return new THREE.BoxGeometry(0.38, 0.42, 0.07); });
+    var carWheels = [], frontPivots = [];
+    [[-0.8, -0.9, true], [0.8, -0.9, true], [-0.8, 0.9, false], [0.8, 0.9, false]].forEach(function (p) {
+      var pv = new THREE.Group(); pv.position.set(p[0], 0.4, p[1]); chassis.add(pv);
+      var w = K.mesh(tyreGeo, K.lam(0x1c1830), 0, 0, 0, pv);
+      K.mesh(hubGeo, K.lam(0xdfe6f5), 0, 0, 0, w);
+      K.mesh(spokeGeo, K.lam(0x8a93b0), 0, 0, 0, w);
+      carWheels.push(w);
+      if (p[2]) frontPivots.push(pv);
+    });
+    var under = K.mesh(new THREE.PlaneGeometry(2, 3.2), own(new THREE.MeshBasicMaterial({ color: 0xffc83a, transparent: true, opacity: 0.3, depthWrite: false })), 0, 0.03, 0, car);
     under.rotation.x = -Math.PI / 2;
     var beam = K.mesh(new THREE.PlaneGeometry(2.6, 7), own(new THREE.MeshBasicMaterial({ color: 0xfff3b0, transparent: true, opacity: 0.12, depthWrite: false })), 0, 0.04, -4.8, car);
     beam.rotation.x = -Math.PI / 2;
     scene.add(car);
+
+    /* tyre smoke puffs, thrown out when you change lanes */
+    var puffs = [];
+    for (i = 0; i < 16; i++) {
+      var pmat = own(new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0, depthWrite: false }));
+      var pm = new THREE.Mesh(sphG, pmat); pm.visible = false; scene.add(pm);
+      puffs.push({ m: pm, mat: pmat, t: 9, vx: 0, vy: 0 });
+    }
+    function spawnPuffs(dir) {
+      var n = 0;
+      for (var q = 0; q < puffs.length && n < 8; q++) {
+        var p = puffs[q];
+        if (p.t < 0.7) continue;
+        p.t = 0; p.vx = -dir * (1.5 + Math.random() * 2); p.vy = 0.6 + Math.random() * 0.8;
+        p.m.position.set(car.position.x + (n % 2 ? 0.8 : -0.8), 0.25, 0.9 + Math.random() * 0.5);
+        p.m.visible = true; n++;
+      }
+    }
 
     /* ---------------------------------------------------------------- obstacles */
     function barrier() {
@@ -212,7 +267,7 @@
     /* ---------------------------------------------------------------- state */
     var r = api.rng;
     var lane = 1, cx = 0, d = 0, rows = [], nextM = 52, openL = 1;
-    var tAcc = 0;
+    var tAcc = 0, roll = 0, rollV = 0, yawA = 0, yawV = 0, bounceY = 0, bounceV = 0;
     function boostNow(s) { return Math.max(0, Math.min(1, (s - 42) / 53)); }
     var over = false, finished = false, flash = 0, spin = 0, shake = 0, raf = 0, last = 0;
     function laneX(l) { return (l - 1) * LANE; }
@@ -238,7 +293,7 @@
     function move(dir) {
       if (over || !api.running()) return;
       var nl = Math.max(0, Math.min(2, lane + dir));
-      if (nl !== lane) { lane = nl; shake = 0.3; api.sfx('tap'); }
+      if (nl !== lane) { lane = nl; shake = 0.3; bounceV = 4.4; spawnPuffs(dir); api.sfx('tap'); }
     }
 
     /* input: buttons, tap a side, swipe, keys */
@@ -328,9 +383,28 @@
       tAcc += dt;
       clouds.forEach(function (c) { c.position.x += (1.2 + spd * 0.02) * dt; if (c.position.x > 80) c.position.x = -80; });
       carWheels.forEach(function (w) { w.rotation.x -= spd * SC * dt * 3.2; });
-      car.position.x = cx;
-      car.position.y = over ? 0 : Math.abs(Math.sin(tAcc * 18)) * 0.025 * (0.4 + boostNow(spd)); /* engine rumble */
-      car.rotation.set(over ? 0 : -0.02 - boostNow(spd) * 0.03, -(laneX(lane) - cx) * 0.08, -(laneX(lane) - cx) * 0.06);
+      /* lane-change animation: the body rolls and yaws on springs (so it wobbles after a switch), hops, and the front wheels steer */
+      var dxl = laneX(lane) - cx;
+      rollV += ((dxl * 0.11 - roll) * 170 - rollV * 9) * dt; roll += rollV * dt;
+      yawV += ((-dxl * 0.12 - yawA) * 130 - yawV * 8) * dt; yawA += yawV * dt;
+      bounceV -= 18 * dt; bounceY += bounceV * dt;
+      if (bounceY < 0) { bounceY = 0; bounceV = 0; }
+      car.position.x = cx; car.position.y = 0; car.rotation.set(0, 0, 0);
+      chassis.position.y = over ? 0 : bounceY + Math.abs(Math.sin(tAcc * 18)) * 0.02 * (0.4 + boostNow(spd));
+      chassis.rotation.set(over ? 0 : -0.02 - boostNow(spd) * 0.03 + bounceY * 0.1, yawA, roll);
+      var steer = Math.max(-0.5, Math.min(0.5, -dxl * 0.35));
+      frontPivots.forEach(function (pv) { pv.rotation.y = steer; });
+      pupils.forEach(function (pp) { pp.position.x = pp.userData.bx + Math.max(-0.07, Math.min(0.07, dxl * 0.05)); });
+      flames.forEach(function (f) { f.scale.set(1, 1, over ? 0.01 : (0.45 + boostNow(spd) * 1.2) * f.userData.k * (0.8 + Math.random() * 0.45)); });
+      puffs.forEach(function (p) {
+        if (p.t >= 0.7) return;
+        p.t += dt;
+        var sc = 0.12 + p.t * 1.1;
+        p.m.scale.set(sc, sc, sc);
+        p.m.position.x += p.vx * dt; p.m.position.y += p.vy * dt * 0.5; p.m.position.z += spd * SC * dt;
+        p.mat.opacity = Math.max(0, 0.7 - p.t * 1.0);
+        if (p.t >= 0.7) p.m.visible = false;
+      });
       if (over && !finished && flash > 0) { car.rotation.y = spin; car.position.y = Math.abs(Math.sin(spin)) * 0.4; }
 
       shake = Math.max(0, shake - dt * 2.2);

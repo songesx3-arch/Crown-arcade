@@ -183,17 +183,38 @@
 
     /* ---------------------------------------------------------------- the chicken */
     var hero = new THREE.Group(), body = new THREE.Group();
-    K.rb(0.66, 0.6, 0.66, 0.14, 0xfffaf0, 0, 0.5, 0, body);
-    K.rb(0.5, 0.36, 0.42, 0.1, 0xfffaf0, 0, 0.92, -0.08, body);
-    K.rb(0.14, 0.18, 0.3, 0.05, 0xff4b6e, 0, 1.17, -0.06, body);
-    K.rb(0.16, 0.12, 0.18, 0.04, 0xffab1f, 0, 0.88, -0.38, body);
-    K.rb(0.1, 0.12, 0.08, 0.03, 0xff4b6e, 0, 0.74, -0.33, body);
-    [-0.2, 0.2].forEach(function (x) { K.rb(0.08, 0.1, 0.06, 0.02, 0x14102e, x, 0.98, -0.3, body); });
+    /* a round, chunky chicken with big eyes. Parts that animate are kept in variables. */
+    var sph = K.geo('hopSph', function () { return new THREE.SphereGeometry(1, 16, 12); });
+    function ball(r, color, x, y, z, parent, sx, sy, sz) { var m = K.mesh(sph, typeof color === 'number' ? K.lam(color) : color, x, y, z, parent); m.scale.set(r * (sx || 1), r * (sy || 1), r * (sz || 1)); return m; }
+    ball(0.5, 0xfffaf0, 0, 0.6, 0.02, body, 1, 0.92, 1.0);             /* round body */
+    ball(0.3, 0xffffff, 0, 0.5, -0.3, body, 1.1, 0.9, 0.6);            /* chest */
+    var head = new THREE.Group(); head.position.set(0, 1.12, -0.12); body.add(head);
+    ball(0.38, 0xfffaf0, 0, 0, 0, head, 1, 0.95, 0.95);                /* big round head */
+    [-1, 0, 1].forEach(function (k) { ball(0.1 - Math.abs(k) * 0.015, 0xff4b6e, k * 0.1, 0.4 - Math.abs(k) * 0.03, -0.02, head, 1, 1.3, 1); }); /* comb */
+    var eyes = [], pupils = [];
+    [-1, 1].forEach(function (sd) {
+      eyes.push(ball(0.13, 0xffffff, sd * 0.19, 0.08, -0.3, head, 1, 1.15, 0.7));
+      pupils.push(ball(0.065, 0x14102e, sd * 0.19, 0.08, -0.38, head, 1, 1.2, 0.6));
+      ball(0.075, 0xff9ab0, sd * 0.3, -0.08, -0.26, head, 1, 0.7, 0.5); /* rosy cheek */
+    });
+    K.rb(0.2, 0.08, 0.24, 0.03, 0xffab1f, 0, -0.02, -0.4, head);      /* upper beak */
+    var beakLow = K.rb(0.17, 0.06, 0.2, 0.03, 0xf08a10, 0, -0.1, -0.38, head);
+    ball(0.055, 0xff4b6e, 0, -0.2, -0.34, head, 1, 1.5, 1);          /* wattle */
     var wings = [];
-    [-0.36, 0.36].forEach(function (x) { wings.push(K.rb(0.08, 0.3, 0.4, 0.04, 0xeee6d2, x, 0.5, 0.04, body)); });
-    K.rb(0.36, 0.22, 0.14, 0.05, 0xeee6d2, 0, 0.66, 0.36, body);
+    [-1, 1].forEach(function (sd) {
+      var pv = new THREE.Group(); pv.position.set(sd * 0.46, 0.8, 0.02); body.add(pv);
+      ball(0.2, 0xeee6d2, 0, -0.16, 0, pv, 0.4, 1.4, 1.2);           /* wing hangs from the shoulder */
+      pv.userData.sd = sd; wings.push(pv);
+    });
+    var tail = new THREE.Group(); tail.position.set(0, 0.7, 0.46); body.add(tail);
+    [-0.5, 0, 0.5].forEach(function (a) { var f = K.rb(0.13, 0.46, 0.08, 0.04, a === 0 ? 0xffab1f : 0xeee6d2, Math.sin(a) * 0.25, 0.2, 0, tail); f.rotation.z = -a; });
     var legs = [];
-    [-0.14, 0.14].forEach(function (x) { legs.push(K.rb(0.07, 0.2, 0.07, 0.02, 0xffab1f, x, 0.1, 0, body)); });
+    [-0.17, 0.17].forEach(function (x) {
+      var hip = new THREE.Group(); hip.position.set(x, 0.3, 0); body.add(hip);
+      K.rb(0.07, 0.3, 0.07, 0.02, 0xffab1f, 0, -0.15, 0, hip);
+      K.rb(0.2, 0.05, 0.28, 0.02, 0xffab1f, 0, -0.3, -0.06, hip);     /* foot */
+      legs.push(hip);
+    });
     hero.add(body);
     scene.add(hero);
     var shadow = K.mesh(K.geo('hopShadow', function () { return new THREE.PlaneGeometry(0.9, 0.9); }), own(K.blobMaterial(0.35)), 0, 0.02, 0, scene);
@@ -316,26 +337,32 @@
           });
         }
       }
-      var prog = hopT > 0 ? 1 - hopT / HOP_T : 0, lift = hopT > 0 ? Math.sin(prog * Math.PI) * 0.6 : 0;
+      var ha = t - dustAt, HV = 0.26, hopping = ha < HV, prog = hopping ? ha / HV : 0, lift = hopping ? Math.sin(prog * Math.PI) * 0.95 : 0;
+      var fl = Math.max(0, 1 - ha / 0.55); /* how lively the chicken still is after a hop */
       var standT = cur.t === 'w' && cur.sub === 'logs' ? 0.22 : 0;
       standY += (standT - standY) * 0.35;
       hero.position.set(rx, standY + lift, -rrw);
       hero.rotation.y = yaw;
-      var idle = !over && hopT <= 0 ? Math.sin(t * 6) * 0.035 : 0; /* breathing bob while waiting */
-      var st = 1 + Math.sin(prog * Math.PI) * 0.16 + idle, sq = Math.max(0.86, 2 - st);
+      var idle = !over && !hopping ? Math.sin(t * 6) * 0.03 : 0; /* breathing while waiting */
+      var land = ha >= HV && ha < 0.6 ? Math.exp(-(ha - HV) * 9) * Math.cos((ha - HV) * 30) * 0.22 : 0; /* squash and wobble on landing */
+      var st = 1 + (hopping ? Math.sin(prog * Math.PI) * 0.28 : -land) + idle, sq = Math.max(0.8, 2 - st);
       body.scale.set(sq, st, sq);
-      /* running: legs scissor, wings flap, body leans into each hop */
-      var hopping = hopT > 0, ph = t * (hopping ? 34 : 5);
+      body.rotation.x = hopping ? -0.35 * Math.sin(prog * Math.PI) : 0;
+      /* legs run while airborne and shuffle after landing; wings flap out; tail and head bounce */
+      var ph = t * (hopping ? 40 : 16);
       legs.forEach(function (lg, k) {
-        var s2 = Math.sin(ph + k * Math.PI);
-        lg.rotation.x = s2 * (hopping ? 1.1 : 0.12);
-        lg.position.y = 0.1 + Math.max(0, s2) * (hopping ? 0.12 : 0.01);
+        lg.rotation.x = Math.sin(ph + k * Math.PI) * (hopping ? 1.2 : fl * 0.7) + (hopping ? 0.3 : 0);
       });
-      wings.forEach(function (wg, k) {
-        var sg = k === 0 ? 1 : -1;
-        wg.rotation.z = sg * (hopping ? 0.35 + Math.abs(Math.sin(t * 38)) * 0.9 : 0.12 + Math.sin(t * 6) * 0.1);
+      wings.forEach(function (wg) {
+        var out = hopping ? 0.5 + Math.abs(Math.sin(t * 36)) * 0.9 : fl * Math.abs(Math.sin(t * 30)) * 0.7 + 0.08 + Math.sin(t * 6) * 0.05;
+        wg.rotation.z = wg.userData.sd * out;
       });
-      body.rotation.x = -0.32 * Math.sin(prog * Math.PI);
+      tail.rotation.x = hopping ? -0.5 * Math.sin(prog * Math.PI) : Math.sin(t * 9) * 0.12 * fl + Math.sin(t * 3) * 0.04;
+      head.position.y = 1.12 + (hopping ? Math.sin(prog * Math.PI) * 0.06 : Math.sin(t * 12) * 0.02 * fl);
+      head.rotation.x = hopping ? -0.2 * Math.sin(prog * Math.PI) : 0;
+      beakLow.rotation.x = hopping || over ? 0.45 : 0;
+      var blink = (t % 3.2) > 3.08 ? 0.12 : 1.15;
+      eyes.forEach(function (e) { e.scale.y = 0.13 * blink; });
       if (over && flash > 0 && !drown) body.scale.set(1.3, 0.2, 1.3);
       if (drown) {
         hero.position.y = standY - Math.max(0, 1 - flash / 0.9) * 0.9;
