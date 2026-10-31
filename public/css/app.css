@@ -231,6 +231,8 @@ main { display: block; }
 .game[data-g="stack"] { --g1: #2f5bff; --g2: #1fb7d6; }
 .game[data-g="lane"]  { --g1: #ff7a2b; --g2: #e8335e; }
 .game[data-g="hop"]   { --g1: #1fb768; --g2: #1a7fd6; }
+.game[data-g="blackjack"] { --g1: #12875a; --g2: #0a4a3b; }
+.game[data-g="chaos"] { --g1: #ff5a3c; --g2: #7a2fd0; }
 .game:active { transform: translateY(3px); box-shadow: 0 2px 0 rgba(0, 0, 0, 0.35); }
 .game[aria-checked="true"] {
   border-color: #fff;
@@ -407,6 +409,16 @@ main { display: block; }
   text-shadow: 0 3px 0 rgba(0, 0, 0, 0.45); opacity: 0;
 }
 .pop.show { animation: popin 0.8s ease-out forwards; }
+.bj-bar { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+.bj-bar button {
+  padding: 15px 8px; border-radius: var(--r-md); border: 2px solid var(--line-strong);
+  background: var(--panel-2); box-shadow: 0 4px 0 rgba(0, 0, 0, 0.35); font-weight: 900; font-size: 1.05rem; touch-action: none; color: inherit; font-family: inherit;
+}
+.bj-bar button:active:not([disabled]) { transform: translateY(3px); box-shadow: 0 1px 0 rgba(0, 0, 0, 0.35); }
+.bj-bar button[disabled] { opacity: 0.4; }
+.blitz-row { margin-top: 10px; }
+.btn.blitz { width: 100%; background: linear-gradient(180deg, #ffd23f, #ff9d1f); color: #3a2200; box-shadow: 0 4px 0 #a85d00; font-weight: 900; }
+.btn.blitz[disabled] { filter: grayscale(0.7); opacity: 0.6; }
 .steer { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .steer button {
   padding: 15px 10px; border-radius: var(--r-md); border: 2px solid var(--line-strong);

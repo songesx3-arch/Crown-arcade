@@ -77,7 +77,7 @@ function view(p) {
     name: p.name, coins: p.coins, crowns: p.crowns,
     wins: p.wins, losses: p.losses, draws: p.draws,
     streak: p.streak, bestStreak: p.bestStreak,
-    best: p.best, history: p.history, google: !!p.google,
+    best: p.best, history: p.history, google: !!p.google, blitz: blitzTargets(p),
     dailyLeft: Math.max(0, p.daily + DAY - now()),
     refillLeft: Math.max(0, p.refillAt + rules.REFILL_EVERY_MS - now()),
     league: leagueName(p.crowns),
@@ -231,6 +231,64 @@ function createMatch(idA, idB, game, stake) {
   }
 }
 
+function blitzTargets(p) {
+  const out = {};
+  for (const g of rules.GAMES) out[g] = rules.blitzTarget(g, p.recent && p.recent[g]);
+  return out;
+}
+
+function recordScore(p, game, score) {
+  if (!p.recent) p.recent = {};
+  const list = p.recent[game] || (p.recent[game] = []);
+  list.push(score);
+  if (list.length > rules.RECENT_LEN) list.splice(0, list.length - rules.RECENT_LEN);
+}
+
+function createBlitz(s, game, stake) {
+  const p = store.get(s.id);
+  const m = newMatch(game, stake, null);
+  m.blitz = { target: rules.blitzTarget(game, p.recent && p.recent[game]) };
+  takeStake(m, s.id);
+  matches.set(m.id, m);
+  store.touch();
+  armDeadline(m);
+  sendWs(s.ws, {
+    t: 'match', mid: m.id, game, stake, seed: m.seed, startIn: START_IN_MS, limitMs: LIMIT_MS, bot: true,
+    blitz: true, target: m.blitz.target, opp: { name: 'Blitz', crowns: 0, streak: 0 }, me: view(p),
+  });
+}
+
+function resolveBlitz(m) {
+  const A = m.players[0];
+  const p = store.get(A.id);
+  const bad = A.forfeit || A.flagged || A.res === null;
+  const mine = bad ? null : A.res;
+  const payout = mine === null ? 0 : rules.blitzPayout(m.stake, mine, m.blitz.target);
+  p.coins += payout;
+  p.escrow = null;
+  let newBest = false;
+  if (mine !== null) {
+    recordScore(p, m.game, mine);
+    if (p.best[m.game] === undefined || mine > p.best[m.game]) { p.best[m.game] = mine; newBest = true; }
+  }
+  const outcome = payout > m.stake ? 'win' : payout === m.stake ? 'draw' : 'loss';
+  p.history.unshift({
+    at: now(), game: m.game, stake: m.stake, outcome, you: mine, opp: m.blitz.target,
+    oppName: 'Blitz', bot: true, net: payout - m.stake,
+  });
+  p.history.length = Math.min(p.history.length, rules.HISTORY_LEN);
+  playerMatch.delete(A.id);
+  const msg = {
+    t: 'result', mid: m.id, game: m.game, stake: m.stake, you: mine, opp: m.blitz.target, oppName: 'Blitz', bot: true,
+    blitz: true, target: m.blitz.target, mult: m.stake ? payout / m.stake : 0,
+    outcome, reason: A.flagged ? 'invalid' : A.forfeit ? 'you_left' : mine === null ? 'timeout' : 'score',
+    payout, net: payout - m.stake, crownsBefore: p.crowns, crownsAfter: p.crowns, crownDelta: 0,
+    streak: p.streak, best: p.best[m.game], newBest, rematch: 0, me: view(p),
+  };
+  if (!sendTo(A.id, msg)) p.pending = msg;
+  store.touch();
+}
+
 function createBotMatch(s, game, stake) {
   const p = store.get(s.id);
   const m = newMatch(game, stake, null);
@@ -264,6 +322,7 @@ function resolve(m) {
   m.done = true;
   clearTimeout(m.timer);
   matches.delete(m.id);
+  if (m.blitz) return resolveBlitz(m);
 
   const [A, B] = m.players;
   const out_ = (x) => x.forfeit || x.flagged;
@@ -312,6 +371,7 @@ function resolve(m) {
       p.draws++;
     }
     const mine = score(me);
+    if (mine !== null) recordScore(p, m.game, mine);
     const newBest = mine !== null && (p.best[m.game] === undefined || mine > p.best[m.game]);
     if (newBest) p.best[m.game] = mine;
     p.history.unshift({
@@ -353,7 +413,7 @@ function handleResult(s, msg) {
     return resolve(m);
   }
   me.res = msg.score;
-  if (m.bot) return resolve(m);
+  if (m.bot || m.blitz) return resolve(m);
 
   const other = m.players.find((x) => x.id !== s.id);
   if (other.res !== null || other.forfeit || other.flagged) return resolve(m);
@@ -366,7 +426,7 @@ function handleResult(s, msg) {
 
 function handleProgress(s, msg) {
   const m = playerMatch.get(s.id);
-  if (!m || m.id !== msg.mid || m.bot || m.done) return;
+  if (!m || m.id !== msg.mid || m.bot || m.blitz || m.done) return;
   const me = m.players.find((x) => x.id === s.id);
   const t = now();
   if (me.res !== null || t - me.lastProg < 120) return;
@@ -537,8 +597,8 @@ function handleHello(s, msg) {
     const mine = m.players.find((x) => x.id === id);
     const other = m.players.find((x) => x.id !== id);
     welcome.active = {
-      mid: m.id, game: m.game, stake: m.stake, finished: mine.res !== null, bot: !!m.bot,
-      oppName: other ? store.get(other.id).name : m.bot.name,
+      mid: m.id, game: m.game, stake: m.stake, finished: mine.res !== null, bot: !!(m.bot || m.blitz), blitz: !!m.blitz, target: m.blitz ? m.blitz.target : undefined,
+      oppName: other ? store.get(other.id).name : m.blitz ? 'Blitz' : m.bot.name,
     };
   }
   if (p.pending) { welcome.pending = p.pending; p.pending = null; store.touch(); }
@@ -590,6 +650,10 @@ function handle(s, msg) {
       if (!guardStart(s, p, msg.game, msg.stake)) return;
       dropRematch(s.id);
       return createBotMatch(s, msg.game, msg.stake);
+    case 'blitz':
+      if (!guardStart(s, p, msg.game, msg.stake)) return;
+      dropRematch(s.id);
+      return createBlitz(s, msg.game, msg.stake);
     case 'room_create':
       if (!guardStart(s, p, msg.game, msg.stake)) return;
       dropRematch(s.id);

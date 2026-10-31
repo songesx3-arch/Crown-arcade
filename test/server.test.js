@@ -190,3 +190,54 @@ test('static files are served with security headers and no traversal', async () 
   const bad = await fetch('http://127.0.0.1:' + port + '/..%2fserver.js');
   assert.strictEqual(bad.status, 404);
 });
+
+test('blitz pays by score against a break-even just above your average', async () => {
+  const a = await guest('Blitzer');
+  const target0 = a.welcome.me.blitz.orbit;
+  assert.ok(target0 > rules.BLITZ_BASE.orbit && target0 <= Math.ceil(rules.BLITZ_BASE.orbit * 1.2), 'break-even starts a little above the baseline');
+
+  /* scoring exactly the break-even returns the stake */
+  a.send({ t: 'blitz', game: 'orbit', stake: 50 });
+  let m = await a.next('match');
+  assert.strictEqual(m.blitz, true);
+  assert.strictEqual(m.target, target0);
+  a.send({ t: 'result', mid: m.mid, score: target0 });
+  let r = await a.next('result');
+  assert.strictEqual(r.blitz, true);
+  assert.strictEqual(r.net, 0);
+  assert.strictEqual(r.crownDelta, 0);
+
+  /* double the break-even pays double */
+  const t1 = r.me.blitz.orbit;
+  a.send({ t: 'blitz', game: 'orbit', stake: 50 });
+  m = await a.next('match');
+  assert.strictEqual(m.target, t1);
+  a.send({ t: 'result', mid: m.mid, score: Math.min(60, t1 * 2) });
+  r = await a.next('result');
+  assert.strictEqual(r.payout, Math.floor(50 * Math.min(60, t1 * 2) / t1));
+  assert.ok(r.net > 0);
+  assert.strictEqual(r.outcome, 'win');
+
+  /* nothing scored loses the stake, and the break-even rises with your average, never below the floor */
+  a.send({ t: 'blitz', game: 'orbit', stake: 25 });
+  m = await a.next('match');
+  a.send({ t: 'result', mid: m.mid, score: 0 });
+  r = await a.next('result');
+  assert.strictEqual(r.net, -25);
+  assert.ok(r.me.blitz.orbit >= Math.ceil(rules.BLITZ_BASE.orbit * 0.5));
+  a.close();
+});
+
+test('blitz payout maths and the new games', () => {
+  assert.strictEqual(rules.blitzPayout(100, 40, 20), 200);
+  assert.strictEqual(rules.blitzPayout(100, 500, 20), 300, 'capped at 3x');
+  assert.strictEqual(rules.blitzPayout(100, 10, 20), 50);
+  assert.ok(rules.blitzTarget('stack', [10, 10, 10, 10, 10, 10, 10, 10, 10, 10]) >= 11, 'a little above the average');
+  assert.ok(rules.GAMES.includes('blackjack') && rules.GAMES.includes('chaos'));
+  assert.strictEqual(rules.plausible('blackjack', 200, 0), true);
+  assert.strictEqual(rules.plausible('blackjack', 601, 99999), false);
+  assert.strictEqual(rules.plausible('blackjack', 600, 500), false, 'cannot win everything instantly');
+  assert.strictEqual(rules.plausible('chaos', 5000, 99999), false);
+  assert.strictEqual(rules.plausible('chaos', 1300, 1000), true, 'a big early chain reaction is allowed');
+  for (const g of ['blackjack', 'chaos']) assert.ok(rules.botScore(g, 1234, 0, 0) > 0);
+});

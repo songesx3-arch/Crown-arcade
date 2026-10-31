@@ -212,7 +212,7 @@
     $('historyList').innerHTML = h.length ? h.map(function (x) {
       var net_ = x.net > 0 ? '+' + x.net : String(x.net);
       return '<li class="' + x.outcome + '"><span class="badge">' + x.outcome.charAt(0).toUpperCase() + '</span>' +
-        '<span class="h-mid"><b>' + G[x.game].name + ' vs ' + CA.esc(x.oppName) + (x.bot ? ' ·🤖' : '') + '</b>' +
+        '<span class="h-mid"><b>' + G[x.game].name + ' vs ' + CA.esc(x.oppName) + (x.bot && x.oppName !== 'Blitz' ? ' ·🤖' : '') + '</b>' +
         '<small>' + CA.fmt(x.game, x.you) + ' – ' + CA.fmt(x.game, x.opp) + ' · ' + CA.ago(x.at) + '</small></span>' +
         '<span class="h-net ' + (x.net > 0 ? 'up' : x.net < 0 ? 'down' : '') + '">' + net_ + '</span></li>';
     }).join('') : '<li class="empty">No matches yet. Your last ' + 12 + ' duels show up here.</li>';
@@ -282,11 +282,12 @@
   }
 
   function renderPlay() {
-    var p = $('play'), bot = $('btnBot'), fr = $('btnFriend'), jn = $('btnJoin');
+    var p = $('play'), bot = $('btnBot'), fr = $('btnFriend'), jn = $('btnJoin'), bz = $('btnBlitz');
     bot.disabled = false;
     if (!net.ready) {
       p.textContent = 'Connecting…'; p.disabled = true; p.dataset.mode = 'wait';
-      fr.disabled = jn.disabled = true;
+      fr.disabled = jn.disabled = bz.disabled = true;
+      $('blitzNote').textContent = '';
       $('prize').innerHTML = ''; $('stakeNote').textContent = '';
       $('lobbyNote').textContent = 'Practice works offline. Duels need a connection.';
       return;
@@ -297,7 +298,8 @@
       p.dataset.mode = 'refill'; p.classList.add('gold');
       p.disabled = wait > 0;
       p.textContent = wait > 0 ? 'Refill in ' + Math.ceil(wait / 60000) + ' min' : 'Refill 500 coins';
-      fr.disabled = true;
+      fr.disabled = bz.disabled = true;
+      $('blitzNote').textContent = '';
       $('prize').innerHTML = '';
       $('lobbyNote').textContent = 'Out of coins. You can refill every 5 minutes, or keep practising.';
       return;
@@ -306,7 +308,9 @@
     if (S.coins < stake) { stake = CA.STAKES[0]; renderStakes(); }
     var crowns = CA.WIN_CROWNS + (S.streak + 1 >= CA.STREAK_AT ? 1 : 0);
     p.textContent = 'Play ' + G[game].name; p.disabled = false; p.dataset.mode = 'play';
-    fr.disabled = false;
+    fr.disabled = bz.disabled = false;
+    var tg = S.blitz && S.blitz[game];
+    $('blitzNote').textContent = tg ? 'Blitz: score ' + CA.fmt(game, tg) + ' to get your stake back (a little above your average). Score more to win up to ×3 = ' + stake * 3 + ' coins.' : '';
     $('stakeNote').textContent = 'You have ' + S.coins;
     $('prize').innerHTML = '<div class="w">Win<b>+' + stake + ' coins · +' + crowns + ' 👑</b></div><div class="l">Lose<b>−' + stake + ' coins · −1 👑</b></div>';
     $('lobbyNote').textContent = 'Matched with a player on the same game and stake. Nobody around? A computer opponent steps in.';
@@ -424,6 +428,10 @@
     if (!canStart()) return;
     busy = true; goFullscreen(); net.send({ t: 'queue', game: game, stake: stake });
   };
+  $('btnBlitz').onclick = function () {
+    if (!canStart()) return;
+    busy = true; goFullscreen(); net.send({ t: 'blitz', game: game, stake: stake });
+  };
   $('btnFriend').onclick = function () {
     if (!canStart()) return;
     busy = true; goFullscreen(); net.send({ t: 'room_create', game: game, stake: stake });
@@ -532,14 +540,16 @@
     CA.unmountGame();
     game = m.game; stake = m.stake; busy = true;
     applyMe(m.me);
-    cur = { mid: m.mid, game: m.game, stake: m.stake, bot: m.bot, oppName: m.opp.name, finished: false, myScore: null,
-      live: 0, oppLive: null, lastSent: 0, timers: [] };
-    setDuel({
+    cur = { mid: m.mid, game: m.game, stake: m.stake, bot: m.bot, blitz: !!m.blitz, oppName: m.opp.name, finished: false, myScore: null,
+      live: 0, oppLive: m.blitz ? m.target : null, lastSent: 0, timers: [] };
+    if (m.blitz) setDuel({ oppName: 'Blitz', oppSub: 'Break-even ' + CA.fmt(m.game, m.target), oppScore: m.target, note: G[m.game].name + ' · Blitz · ' + m.stake + ' coins' });
+    else setDuel({
       oppName: m.opp.name,
       oppSub: m.bot ? 'Computer' : CA.LEAGUES[CA.leagueIdx(m.opp.crowns)][0] + ' · ' + m.opp.crowns + ' 👑',
       oppScore: m.bot ? '?' : '0',
       note: G[m.game].name + ' · ' + m.stake + ' coins · board #' + m.seed,
     });
+    if (m.blitz) $('oppAva').textContent = '⚡';
     show('match');
     CA.sfx('match');
     var my = cur;
@@ -683,6 +693,7 @@
   function showResult(m) {
     CA.unmountGame(); handle = null;
     if (cur && cur.timers) cur.timers.forEach(clearTimeout);
+    if (m.blitz) return showBlitzResult(m);
     var g = m.game, win = m.outcome === 'win', draw = m.outcome === 'draw';
     var bef = CA.leagueIdx(m.crownsBefore), aft = CA.leagueIdx(m.crownsAfter);
     var flags = '';
@@ -732,6 +743,39 @@
       if (offer) { net.send({ t: 'rematch_no', mid: offer.mid }); offer = null; }
       game = g; stake = m.stake; busy = true; goFullscreen();
       net.send({ t: 'queue', game: g, stake: m.stake });
+    };
+    $('back').onclick = backToLobby;
+    if (S.coins < m.stake) { $('again').disabled = true; $('again').textContent = 'Not enough coins'; }
+  }
+
+  function showBlitzResult(m) {
+    var g = m.game, win = m.outcome === 'win', draw = m.outcome === 'draw';
+    var title = m.reason !== 'score' ? 'No score' : win ? 'Blitz win!' : draw ? 'Break-even' : 'Short of break-even';
+    var html = '<div class="result-card ' + (draw ? '' : win ? 'win' : 'loss') + '">' +
+      '<p class="muted">⚡ Blitz · ' + G[g].name + ' · ' + m.stake + ' coins</p>' +
+      '<p class="result-title">' + title + '</p>' +
+      (REASONS[m.reason] ? '<p class="reason">' + REASONS[m.reason] + '</p>' : '') +
+      '<div class="delta-row"><span class="delta ' + (m.net > 0 ? 'up' : m.net < 0 ? 'down' : '') + '"><i class="ico-coin"></i><span id="dCoins">0</span></span></div>' +
+      '<div class="vs-card"><div class="' + (win ? 'top' : '') + '"><span>You</span><b>' + CA.fmt(g, m.you) + '</b></div>' +
+      '<div><span>Break-even</span><b>' + CA.fmt(g, m.target) + '</b></div></div>' +
+      '<div class="ledger"><p><span>Stake</span><b>−' + m.stake + '</b></p><p><span>Payout</span><b>+' + m.payout + '</b></p>' +
+      '<p><span>Multiplier</span><b>×' + (Math.round(m.mult * 100) / 100) + '</b></p>' +
+      (m.best !== undefined && m.best !== null ? '<p><span>Your best</span><b>' + CA.fmt(g, m.best) + '</b></p>' : '') + '</div>' +
+      (m.newBest && m.you !== null ? '<p class="flag gold">New personal best: ' + CA.fmt(g, m.you) + '</p>' : '') +
+      '<p class="muted small">Break-even for your next ' + G[g].name + ' Blitz: ' + CA.fmt(g, m.me.blitz[g]) + '. It follows your recent average.</p>' +
+      '<div class="result-actions"><div class="split"><button class="btn btn-go" id="again" type="button">Blitz again</button>' +
+      '<button class="btn btn-soft" id="back" type="button">Lobby</button></div></div></div>';
+    var res = $('result');
+    res.innerHTML = html;
+    cur = null; busy = false;
+    if (m.me) applyMe(m.me);
+    show('result');
+    CA.countTo($('dCoins'), 0, m.net, 900, function (v) { return (v > 0 ? '+' : '') + v; });
+    if (win) { CA.sfx('win'); CA.confetti(); } else if (!draw) CA.sfx('lose'); else CA.sfx('coin');
+    $('again').onclick = function () {
+      if (S.coins < m.stake || !net.ready) return backToLobby();
+      game = g; stake = m.stake; busy = true; goFullscreen();
+      net.send({ t: 'blitz', game: g, stake: m.stake });
     };
     $('back').onclick = backToLobby;
     if (S.coins < m.stake) { $('again').disabled = true; $('again').textContent = 'Not enough coins'; }

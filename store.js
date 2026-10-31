@@ -11,7 +11,7 @@ const { START_COINS } = require('./rules');
 function defaults(name) {
   return {
     name, coins: START_COINS, crowns: 0, wins: 0, losses: 0, draws: 0,
-    streak: 0, bestStreak: 0, best: {}, history: [],
+    streak: 0, bestStreak: 0, best: {}, history: [], recent: {},
     daily: 0, refillAt: 0, created: Date.now(), seen: Date.now(),
     escrow: null, pending: null, google: null,
   };
