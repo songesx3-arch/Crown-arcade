@@ -3,8 +3,9 @@
  * Slide the cannon left and right (drag, or arrow keys / A and D) while it auto-fires at rocks falling
  * from the sky. Big rocks take several hits. Some rocks carry a glowing power-up: shoot them to drop it,
  * then catch it with the cannon. LASER pierces everything in a column, TRIPLE fires three shots at once,
- * FREEZE stops every rock for a few seconds. A rock that hits the ground or the cannon costs a life.
- * You have 3 lives and 60 seconds. The rock schedule is seeded, so both players in a duel face the same sky.
+ * FREEZE stops every rock for a few seconds, SHIELD wraps the cannon in a bubble that smashes rocks.
+ * Power-ups stack: LASER + TRIPLE gives three laser beams. Rocks bounce off the ground, so they keep
+ * coming until you break them; one that hits the cannon costs a life. You have 3 lives and 60 seconds. The rock schedule is seeded, so both players in a duel face the same sky.
  */
 (function () {
   'use strict';
@@ -16,8 +17,10 @@
       laser: { name: 'LASER', color: '#ff4d6d', letter: 'L', dur: 5 },
       triple: { name: 'TRIPLE SHOT', color: '#ffc93c', letter: '3', dur: 8 },
       freeze: { name: 'FREEZE', color: '#5ad8ff', letter: '*', dur: 4 },
+      shield: { name: 'SHIELD', color: '#5affb0', letter: 'S', dur: 8 },
     };
-    var SIZES = [null, { r: 15, hp: 1, pts: 10 }, { r: 23, hp: 2, pts: 20 }, { r: 33, hp: 4, pts: 40 }];
+    var SIZES = [null, { r: 15, hp: 3, pts: 10 }, { r: 23, hp: 6, pts: 25 }, { r: 33, hp: 10, pts: 50 }];
+    var GRAVITY = 190, MAXVY = 430;
 
     var cv = api.canvas, ctx = cv.getContext('2d');
     var dpr = Math.min(2, window.devicePixelRatio || 1);
@@ -27,22 +30,22 @@
 
     /* the whole sky is decided up front from the shared seed */
     var r = api.rng, schedule = [], t0 = 0.7, i;
-    var kinds = ['laser', 'triple', 'freeze', 'triple', 'laser', 'freeze'], kn = 0;
+    var kinds = ['laser', 'triple', 'shield', 'freeze', 'triple', 'laser', 'shield', 'freeze'], kn = 0;
     while (t0 < TIME) {
       var roll = r(), size = roll < 0.5 ? 1 : roll < 0.82 ? 2 : 3, power = null;
-      if (size >= 2 && r() < 0.2) { power = kinds[kn++ % kinds.length]; } else if (size === 1) { r(); }
+      if (size >= 2 && r() < 0.26) { power = kinds[kn++ % kinds.length]; } else if (size === 1) { r(); }
       var verts = [], nv = 9;
       for (i = 0; i < nv; i++) verts.push(0.82 + r() * 0.3);
       schedule.push({
-        at: t0, x: 30 + r() * (W - 60), size: size, power: power, vx: (r() - 0.5) * 36, vy: 62 + r() * 34 - size * 5,
+        at: t0, x: 30 + r() * (W - 60), size: size, power: power, vx: (r() - 0.5) * 46, vy: 110 + r() * 50 - size * 6,
         rs: (r() - 0.5) * 2, verts: verts,
       });
-      t0 += Math.max(0.42, 1.2 - t0 * 0.013) * (0.75 + r() * 0.5);
+      t0 += Math.max(0.5, 1.3 - t0 * 0.013) * (0.75 + r() * 0.5);
     }
     var nextRock = 0;
 
     var score = 0, lives = LIVES, time = 0, over = false, started = false, raf = 0, last = 0;
-    var cx = W / 2, tx = W / 2, keys = { l: false, r: false }, fireT = 0.3, laserT = 0, tripleT = 0, freezeT = 0, laserTick = 0, shake = 0, hurt = 0;
+    var cx = W / 2, tx = W / 2, keys = { l: false, r: false }, fireT = 0.3, laserT = 0, tripleT = 0, freezeT = 0, shieldT = 0, laserTick = 0, shake = 0, hurt = 0;
     var rocks = [], bullets = [], caps = [], parts = [], floats = [], stars = [];
     for (i = 0; i < 40; i++) stars.push({ x: r() * W, y: r() * H, s: 0.4 + r() * 1.4, v: 6 + r() * 26 });
 
@@ -87,12 +90,14 @@
     }
     function give(type) {
       var p = POWER[type];
-      if (type === 'laser') laserT = p.dur; else if (type === 'triple') tripleT = p.dur; else freezeT = p.dur;
-      api.pop(p.name + '!', p.color);
+      if (type === 'laser') laserT = p.dur; else if (type === 'triple') tripleT = p.dur; else if (type === 'freeze') freezeT = p.dur; else shieldT = p.dur;
+      if (laserT > 0 && tripleT > 0 && (type === 'laser' || type === 'triple')) api.pop('TRIPLE LASER!', '#ff4d6d');
+      if (!(laserT > 0 && tripleT > 0 && (type === 'laser' || type === 'triple'))) api.pop(p.name + '!', p.color);
       CA.sfx('coin'); CA.buzz(30);
       burst(cx, CY - 20, p.color, 18, 200);
     }
 
+    function beamAngles() { return tripleT > 0 ? [-0.2, 0, 0.2] : [0]; }
     function pointerX(e) { var rc = cv.getBoundingClientRect(); return (e.clientX - rc.left) / rc.width * W; }
     function onMove(e) { tx = Math.max(24, Math.min(W - 24, pointerX(e))); }
     function onDown(e) { e.preventDefault(); onMove(e); }
@@ -112,22 +117,30 @@
       tx = Math.max(24, Math.min(W - 24, tx));
       var dx = tx - cx, step = 900 * dt;
       cx += Math.abs(dx) <= step ? dx : Math.sign(dx) * step;
-      laserT = Math.max(0, laserT - dt); tripleT = Math.max(0, tripleT - dt); freezeT = Math.max(0, freezeT - dt);
+      laserT = Math.max(0, laserT - dt); tripleT = Math.max(0, tripleT - dt); freezeT = Math.max(0, freezeT - dt); shieldT = Math.max(0, shieldT - dt);
       shake = Math.max(0, shake - dt * 2.5); hurt = Math.max(0, hurt - dt * 2);
 
       while (nextRock < schedule.length && schedule[nextRock].at <= time) {
         var s = schedule[nextRock++];
-        rocks.push({ x: s.x, y: -SIZES[s.size].r, vx: s.vx, vy: s.vy * (1 + time * 0.012), rot: 0, rs: s.rs, size: s.size, hp: SIZES[s.size].hp, power: s.power, verts: s.verts, flash: 0, dead: false });
+        rocks.push({ x: s.x, y: -SIZES[s.size].r, vx: s.vx, vy: s.vy * (1 + time * 0.016), rot: 0, rs: s.rs, size: s.size, hp: SIZES[s.size].hp, power: s.power, verts: s.verts, flash: 0, dead: false });
       }
 
       var fz = freezeT > 0 ? 0.05 : 1;
       rocks.forEach(function (rk) {
         var def = SIZES[rk.size];
+        rk.vy = Math.min(MAXVY * (1 + time * 0.004), rk.vy + GRAVITY * fz * dt);
         rk.y += rk.vy * fz * dt; rk.x += rk.vx * fz * dt; rk.rot += rk.rs * fz * dt; rk.flash = Math.max(0, rk.flash - dt * 6);
         if (rk.x < def.r) { rk.x = def.r; rk.vx = Math.abs(rk.vx); } else if (rk.x > W - def.r) { rk.x = W - def.r; rk.vx = -Math.abs(rk.vx); }
         if (rk.dead) return;
-        if (rk.y + def.r >= GROUND) { rk.dead = true; loseLife(rk.x, GROUND); return; }
-        if (rk.y + def.r > CY - 30 && Math.abs(rk.x - cx) < def.r + 20) { rk.dead = true; loseLife(cx, CY - 20); }
+        /* the ground is bouncy: rocks hop back up instead of vanishing */
+        if (rk.y + def.r >= GROUND && rk.vy > 0) {
+          rk.y = GROUND - def.r; rk.vy = -Math.max(190, rk.vy * 0.82);
+          if (Math.abs(rk.vx) < 20) rk.vx = (rk.x < cx ? 1 : -1) * 26;
+          burst(rk.x, GROUND, '#cbbdff', 4, 70);
+        }
+        var dxc = rk.x - cx, dyc = rk.y - (CY - 18);
+        if (shieldT > 0 && Math.hypot(dxc, dyc) < def.r + 46) { destroy(rk); burst(rk.x, rk.y, '#5affb0', 12, 200); return; }
+        if (rk.y + def.r > CY - 30 && Math.abs(dxc) < def.r + 20) { rk.dead = true; loseLife(cx, CY - 20); }
       });
 
       /* firing: the laser replaces the bullets while it lasts */
@@ -138,9 +151,13 @@
         laserTick -= dt;
         if (laserTick <= 0) {
           laserTick = 0.08;
-          rocks.forEach(function (rk) {
-            if (rk.dead || rk.y < -10) return;
-            if (Math.abs(rk.x - cx) < SIZES[rk.size].r + 9) { rk.hp -= 1; rk.flash = 1; if (rk.hp <= 0) destroy(rk); }
+          var ox = cx, oy = CY - 40;
+          beamAngles().forEach(function (an) {
+            rocks.forEach(function (rk) {
+              if (rk.dead || rk.y < -10) return;
+              var dx = rk.x - ox, dy = rk.y - oy, perp = Math.abs(dx * Math.cos(an) + dy * Math.sin(an)), along = dx * Math.sin(an) - dy * Math.cos(an);
+              if (along > 0 && perp < SIZES[rk.size].r + 9) { rk.hp -= 1; rk.flash = 1; if (rk.hp <= 0) destroy(rk); }
+            });
           });
         }
       }
@@ -214,8 +231,15 @@
       if (rk.power) {
         ctx.fillStyle = POWER[rk.power].color; ctx.beginPath(); ctx.arc(0, 0, def.r * 0.38, 0, 6.28); ctx.fill();
         ctx.fillStyle = '#fff'; ctx.font = '900 ' + Math.round(def.r * 0.5) + 'px Arial, sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-        ctx.rotate(-rk.rot); ctx.fillText(POWER[rk.power].letter, 0, 1);
+        ctx.rotate(-rk.rot); ctx.fillText(POWER[rk.power].letter, 0, -def.r * 0.12); ctx.rotate(rk.rot);
       }
+      /* hits left, drawn upright so it is always readable */
+      ctx.rotate(-rk.rot);
+      var hy = rk.power ? def.r * 0.72 : 0;
+      ctx.font = '900 ' + Math.round(def.r * (rk.power ? 0.5 : 0.8)) + 'px Arial, sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.lineWidth = 4; ctx.strokeStyle = 'rgba(20,10,50,0.85)'; ctx.strokeText(String(rk.hp), 0, hy + 1);
+      ctx.fillStyle = '#fff'; ctx.fillText(String(rk.hp), 0, hy + 1);
+      ctx.rotate(rk.rot);
       if (rk.flash > 0) { ctx.rotate(0); ctx.fillStyle = 'rgba(255,255,255,' + 0.6 * rk.flash + ')'; ctx.beginPath(); ctx.arc(0, 0, def.r, 0, 6.28); ctx.fill(); }
       ctx.restore();
     }
@@ -229,13 +253,17 @@
       ctx.fillStyle = '#2a1a66'; ctx.fillRect(-20, GROUND, W + 40, H - GROUND + 20);
       ctx.fillStyle = 'rgba(255,255,255,0.15)'; ctx.fillRect(-20, GROUND, W + 40, 3);
 
-      /* laser beam */
+      /* laser beams (three of them when stacked with triple) */
       if (laserT > 0) {
-        var lw = 14 + Math.sin(time * 40) * 3;
-        var lg = ctx.createLinearGradient(cx - lw, 0, cx + lw, 0);
-        lg.addColorStop(0, 'rgba(255,77,109,0)'); lg.addColorStop(0.5, 'rgba(255,230,240,0.95)'); lg.addColorStop(1, 'rgba(255,77,109,0)');
-        ctx.fillStyle = lg; ctx.fillRect(cx - lw, 0, lw * 2, CY - 40);
-        ctx.fillStyle = 'rgba(255,77,109,0.25)'; ctx.fillRect(cx - lw * 1.8, 0, lw * 3.6, CY - 40);
+        beamAngles().forEach(function (an) {
+          var lw = 13 + Math.sin(time * 40) * 3;
+          ctx.save(); ctx.translate(cx, CY - 40); ctx.rotate(an);
+          var lg = ctx.createLinearGradient(-lw, 0, lw, 0);
+          lg.addColorStop(0, 'rgba(255,77,109,0)'); lg.addColorStop(0.5, 'rgba(255,230,240,0.95)'); lg.addColorStop(1, 'rgba(255,77,109,0)');
+          ctx.fillStyle = lg; ctx.fillRect(-lw, -800, lw * 2, 800);
+          ctx.fillStyle = 'rgba(255,77,109,0.22)'; ctx.fillRect(-lw * 1.8, -800, lw * 3.6, 800);
+          ctx.restore();
+        });
       }
 
       rocks.forEach(drawRock);
@@ -256,6 +284,14 @@
       });
 
       /* cannon */
+      if (shieldT > 0) {
+        var sa = shieldT < 1.5 ? (Math.floor(time * 10) % 2 ? 0.5 : 1) : 1;
+        ctx.save(); ctx.globalAlpha = sa;
+        var sg = ctx.createRadialGradient(cx, CY - 18, 20, cx, CY - 18, 50);
+        sg.addColorStop(0, 'rgba(90,255,176,0.05)'); sg.addColorStop(0.85, 'rgba(90,255,176,0.28)'); sg.addColorStop(1, 'rgba(200,255,230,0.75)');
+        ctx.fillStyle = sg; ctx.beginPath(); ctx.arc(cx, CY - 18, 50, 0, 6.28); ctx.fill();
+        ctx.restore();
+      }
       ctx.save(); ctx.translate(cx, CY);
       if (hurt > 0) ctx.globalAlpha = 0.5 + 0.5 * Math.sin(time * 50);
       ctx.fillStyle = laserT > 0 ? '#ff4d6d' : '#2b2552'; rr(-9, -42, 18, 40, 6); ctx.fill();
@@ -276,13 +312,13 @@
 
       /* active power-ups and the clock */
       var bx = 10;
-      [['laser', laserT], ['triple', tripleT], ['freeze', freezeT]].forEach(function (pt) {
+      [['laser', laserT], ['triple', tripleT], ['freeze', freezeT], ['shield', shieldT]].forEach(function (pt) {
         if (pt[1] <= 0) return;
         var p = POWER[pt[0]];
-        ctx.fillStyle = 'rgba(12,8,36,0.6)'; rr(bx, 10, 70, 20, 8); ctx.fill();
-        ctx.fillStyle = p.color; rr(bx + 3, 13, 64 * (pt[1] / p.dur), 14, 6); ctx.fill();
-        ctx.fillStyle = '#fff'; ctx.font = '900 10px Arial, sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(p.name.split(' ')[0], bx + 35, 20);
-        bx += 76;
+        ctx.fillStyle = 'rgba(12,8,36,0.6)'; rr(bx, 10, 62, 20, 8); ctx.fill();
+        ctx.fillStyle = p.color; rr(bx + 3, 13, 56 * (pt[1] / p.dur), 14, 6); ctx.fill();
+        ctx.fillStyle = '#fff'; ctx.font = '900 10px Arial, sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(p.name.split(' ')[0], bx + 31, 20);
+        bx += 66;
       });
       ctx.fillStyle = 'rgba(255,255,255,0.85)'; ctx.font = '900 14px "Nunito", Arial, sans-serif'; ctx.textAlign = 'right'; ctx.textBaseline = 'alphabetic';
       ctx.fillText(Math.max(0, Math.ceil(TIME - time)) + 's', W - 10, 24);
