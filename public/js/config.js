@@ -29,8 +29,8 @@
     blurb: 'Ten hands. Finish with the most chips.',
     tip: 'Hit, stand or double. You start with 200 chips and bet 20 a hand. Both players get the same shuffled cards.' };
   CA.GAMES.chaos = { name: 'Chaos Cannon', unit: 'pts', label: 'Points', skill: 'Aim', is3d: false,
-    blurb: 'Ten shots. Chain the explosions.',
-    tip: 'Tap to fire the sweeping cannon. TNT and mega bombs set off their neighbours, and every step of a chain is worth more.' };
+    blurb: 'Slide and blast the falling rocks.',
+    tip: 'Drag to slide the cannon; it fires by itself. Shoot glowing rocks and catch what drops: laser, triple shot or freeze. Three lives, 60 seconds.' };
   CA.GKEYS = ['orbit', 'stack', 'lane', 'hop', 'blackjack', 'chaos'];
 
   /* mulberry32, identical to the server, so both players get the same board. */

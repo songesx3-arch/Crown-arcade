@@ -238,6 +238,7 @@ test('blitz payout maths and the new games', () => {
   assert.strictEqual(rules.plausible('blackjack', 601, 99999), false);
   assert.strictEqual(rules.plausible('blackjack', 600, 500), false, 'cannot win everything instantly');
   assert.strictEqual(rules.plausible('chaos', 5000, 99999), false);
-  assert.strictEqual(rules.plausible('chaos', 1300, 1000), true, 'a big early chain reaction is allowed');
+  assert.strictEqual(rules.plausible('chaos', 1300, 1000), false, 'cannot score that much so early');
+  assert.strictEqual(rules.plausible('chaos', 300, 1000), true);
   for (const g of ['blackjack', 'chaos']) assert.ok(rules.botScore(g, 1234, 0, 0) > 0);
 });

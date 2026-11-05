@@ -14,7 +14,7 @@ Node 18+, one dependency (`ws`). Deploy anywhere with WebSocket support (`render
 
 ## Blackjack, Chaos Cannon and Blitz
 - **Blackjack:** ten hands, 200 starting chips, 20 a hand (40 doubled), 3:2 blackjack, dealer stands on 17. Score = chips left. The shoe is seeded, so both duelists see the same cards.
-- **Chaos Cannon:** ten shots at a seeded field; TNT and mega bombs chain, and each step of a chain is worth more.
+- **Chaos Cannon:** slide the cannon (drag or arrow keys) while it auto-fires at falling rocks. Glowing rocks drop power-ups (laser, triple shot, freeze). Three lives, 60 seconds, a seeded sky so both duelists face the same rocks.
 - **Blitz (all games):** play alone for coins. Break-even is about 10% above your recent average in that game (average of your last 10 scores, blended with a starting guess for new players, with a floor so you can't tank it). Score the break-even and you get your stake back; below it you get a fraction; above it up to 3x. It does not change crowns or win/loss records.
 
 ## Endless 3D games
