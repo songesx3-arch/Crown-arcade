@@ -30,7 +30,7 @@
     tip: 'Hit, stand or double. You start with 200 chips and bet 20 a hand. Both players get the same shuffled cards.' };
   CA.GAMES.chaos = { name: 'Chaos Cannon', unit: 'pts', label: 'Points', skill: 'Aim', is3d: false,
     blurb: 'Blast bouncing rocks. Stack power-ups.',
-    tip: 'Drag to slide the cannon; it fires by itself. Shoot glowing rocks and catch what drops: laser, triple shot, freeze or shield. Power-ups stack! Rocks bounce, so watch the hit counters. Three lives, 60 seconds.' };
+    tip: 'Drag to slide the cannon; it fires by itself. Shoot glowing rocks and catch what drops: laser, triple shot, freeze or shield. Power-ups stack, but vanish 5s after landing. Max 3 rocks; they bounce, so watch the hit counters. Three lives, 60 seconds.' };
   CA.GKEYS = ['orbit', 'stack', 'lane', 'hop', 'blackjack', 'chaos'];
 
   /* mulberry32, identical to the server, so both players get the same board. */

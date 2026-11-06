@@ -42,7 +42,7 @@
       });
       t0 += Math.max(0.5, 1.3 - t0 * 0.013) * (0.75 + r() * 0.5);
     }
-    var nextRock = 0;
+    var nextRock = 0, MAXROCKS = 3, SIT = 5;
 
     var score = 0, lives = LIVES, time = 0, over = false, started = false, raf = 0, last = 0;
     var cx = W / 2, tx = W / 2, keys = { l: false, r: false }, fireT = 0.3, laserT = 0, tripleT = 0, freezeT = 0, shieldT = 0, laserTick = 0, shake = 0, hurt = 0;
@@ -120,7 +120,8 @@
       laserT = Math.max(0, laserT - dt); tripleT = Math.max(0, tripleT - dt); freezeT = Math.max(0, freezeT - dt); shieldT = Math.max(0, shieldT - dt);
       shake = Math.max(0, shake - dt * 2.5); hurt = Math.max(0, hurt - dt * 2);
 
-      while (nextRock < schedule.length && schedule[nextRock].at <= time) {
+      /* at most 3 rocks on screen: a waiting rock enters as soon as there is room */
+      while (nextRock < schedule.length && schedule[nextRock].at <= time && rocks.length < MAXROCKS) {
         var s = schedule[nextRock++];
         rocks.push({ x: s.x, y: -SIZES[s.size].r, vx: s.vx, vy: s.vy * (1 + time * 0.016), rot: 0, rs: s.rs, size: s.size, hp: SIZES[s.size].hp, power: s.power, verts: s.verts, flash: 0, dead: false });
       }
@@ -182,9 +183,10 @@
       });
 
       caps.forEach(function (c) {
-        c.t += dt; c.y += c.vy * dt;
-        if (c.y > CY - 36 && c.y < CY + 10 && Math.abs(c.x - cx) < 38) { c.dead = true; give(c.type); }
-        else if (c.y > H + 20) c.dead = true;
+        c.t += dt;
+        if (!c.landed) { c.y += c.vy * dt; if (c.y >= GROUND - 16) { c.y = GROUND - 16; c.landed = true; c.sit = 0; } }
+        else { c.sit += dt; if (c.sit >= SIT) c.dead = true; }   /* sits on the ground for 5 seconds, then disappears */
+        if (!c.dead && c.y > CY - 40 && c.y < CY + 10 && Math.abs(c.x - cx) < 38) { c.dead = true; give(c.type); }
       });
 
       parts.forEach(function (p) { p.t += dt; p.vy += 300 * dt; p.x += p.vx * dt; p.y += p.vy * dt; });
@@ -275,7 +277,8 @@
 
       caps.forEach(function (c) {
         var p = POWER[c.type], bob = Math.sin(c.t * 8) * 2;
-        ctx.save(); ctx.translate(c.x, c.y + bob);
+        if (c.landed && SIT - c.sit < 1.5 && Math.floor(c.t * 10) % 2) return;   /* blink before vanishing */
+        ctx.save(); ctx.translate(c.x, c.y + (c.landed ? 0 : bob));
         ctx.fillStyle = p.color; ctx.globalAlpha = 0.3; ctx.beginPath(); ctx.arc(0, 0, 24, 0, 6.28); ctx.fill(); ctx.globalAlpha = 1;
         ctx.fillStyle = p.color; rr(-15, -15, 30, 30, 10); ctx.fill();
         ctx.lineWidth = 3; ctx.strokeStyle = '#fff'; ctx.stroke();
