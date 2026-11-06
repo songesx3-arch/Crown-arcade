@@ -177,6 +177,31 @@
     </section>
 
     <!-- ---------------------------------------------------- PROFILE -->
+    <section class="view" id="tab-shelf" role="tabpanel" aria-labelledby="t-shelf" hidden>
+      <section class="panel">
+        <h2>Shelf Counter</h2>
+        <p class="muted small">Camera as a service: capture one photo from the classroom camera, then ask the vision AI to count the boxes and cans of soda. Compare it with your own count.</p>
+        <div class="row-btns"><button class="btn" id="shCheck" type="button">Check camera</button><button class="btn primary" id="shCapture" type="button">Capture photo</button></div>
+        <p class="muted small" id="shStatus" role="status"></p>
+        <img id="shImg" alt="What the AI saw" hidden style="width:100%;border-radius:12px;margin-top:8px">
+        <a id="shDl" class="muted small" download="what_ai_saw.jpg" hidden>Download what_ai_saw.jpg</a>
+      </section>
+      <section class="panel">
+        <h2>Your prompt</h2>
+        <textarea id="shPrompt" rows="4" maxlength="600" style="width:100%">What items do you see? List each one with a total count.</textarea>
+        <p class="muted small">Ideas: say exactly what to count (only boxes and cans of soda); what to ignore (people, hands, the table); how to count (left to right, one row at a time); a fixed format like "boxes: N, cans of soda: N"; say "unsure" if something is cut off. Change one thing at a time.</p>
+        <div class="row-btns"><button class="btn primary" id="shRun" type="button">Run 3 times</button></div>
+        <div id="shAnswers"></div>
+      </section>
+      <section class="panel">
+        <h2>Prompt log</h2>
+        <p class="muted small">Your hand count of the photo: boxes <input id="shBoxes" type="number" min="0" style="width:4em"> cans of soda <input id="shCans" type="number" min="0" style="width:4em"></p>
+        <button class="btn" id="shLog" type="button">Save this prompt and its 3 answers to the log</button>
+        <ul class="list" id="shLogList"></ul>
+        <p class="muted small">Done when the AI matches your count 3 runs in a row.</p>
+      </section>
+    </section>
+
     <section class="view" id="tab-profile" role="tabpanel" aria-labelledby="t-profile" hidden>
       <section class="panel idcard">
         <div class="avatar" id="avatar">P</div>
@@ -228,6 +253,9 @@
       <button class="tab" id="t-league" role="tab" aria-selected="false" type="button">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4h10v5a5 5 0 0 1-10 0z M7 6H4v1.5A3.5 3.5 0 0 0 7.5 11 M17 6h3v1.5A3.5 3.5 0 0 1 16.5 11 M12 14v4 M8 20h8" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
         <span>League</span></button>
+      <button class="tab" id="t-shelf" role="tab" aria-selected="false" type="button">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16M4 12h16M4 19h16M7 5v7M13 12v7M17 5v7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+        <span>Shelf</span></button>
       <button class="tab" id="t-profile" role="tab" aria-selected="false" type="button">
         <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8.5" r="4" fill="none" stroke="currentColor" stroke-width="2"/><path d="M4.5 20.5a7.5 7.5 0 0 1 15 0" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
         <span>Profile</span></button>

@@ -360,7 +360,7 @@
   }
 
   /* ============================================================ lobby controls */
-  var TABS = ['play', 'league', 'profile'], ladderT = null;
+  var TABS = ['play', 'league', 'shelf', 'profile'], ladderT = null;
   function setTab(n) {
     TABS.forEach(function (t) { $('tab-' + t).hidden = t !== n; $('t-' + t).setAttribute('aria-selected', String(t === n)); });
     clearInterval(ladderT);
@@ -369,6 +369,61 @@
     window.scrollTo(0, 0);
   }
   TABS.forEach(function (t) { $('t-' + t).onclick = function () { setTab(t); }; });
+
+
+  /* ============================================================ shelf counter */
+  (function () {
+    var frameId = null, runs = [], LOG = 'ca_shelf_log';
+    function status(t) { $('shStatus').textContent = t; }
+    function getJSON(url) { return fetch(url).then(function (r) { return r.json(); }); }
+    function loadLog() { try { return JSON.parse(localStorage.getItem(LOG) || '[]'); } catch (e) { return []; } }
+    function renderLog() {
+      var ul = $('shLogList'); ul.innerHTML = '';
+      loadLog().forEach(function (e) {
+        var li = document.createElement('li'); li.className = 'sh-ans';
+        li.textContent = e.prompt + '\n\nHand count: boxes ' + e.boxes + ', cans ' + e.cans + '\n' + e.answers.map(function (a, i) { return (i + 1) + ') ' + a; }).join('\n');
+        ul.appendChild(li);
+      });
+    }
+    $('shCheck').onclick = function () {
+      status('Checking camera...');
+      getJSON('/api/shelf/health').then(function (j) { status(j.error || (j.status === 'ok' ? 'Camera OK.' : 'Camera says: ' + j.status + (j.status === 'no_frame' ? ' (wait 5 seconds and try again)' : ''))); })
+        .catch(function () { status('Could not reach the camera.'); });
+    };
+    $('shCapture').onclick = function () {
+      status('Capturing...');
+      getJSON('/api/shelf/capture').then(function (j) {
+        if (j.error) return status(j.error);
+        frameId = j.id; runs = [];
+        $('shImg').src = '/api/shelf/image/' + j.id + '.jpg'; $('shImg').hidden = false;
+        $('shDl').href = $('shImg').src; $('shDl').hidden = false;
+        $('shAnswers').innerHTML = '';
+        status('Photo captured (' + j.length.toLocaleString() + ' characters). This is the exact picture the AI will see: count it by hand.');
+      }).catch(function () { status('Could not capture a photo.'); });
+    };
+    $('shRun').onclick = function () {
+      if (!frameId) return status('Capture a photo first.');
+      var q = $('shPrompt').value.trim(); if (!q) return status('Write a prompt first.');
+      var box = $('shAnswers'); box.innerHTML = ''; runs = [];
+      $('shRun').disabled = true; status('Asking the AI (the first run can take up to a minute)...');
+      var i = 0;
+      (function next() {
+        if (i >= 3) { $('shRun').disabled = false; return status('Done. Compare with your hand count.'); }
+        var n = ++i;
+        getJSON('/api/shelf/ask?id=' + frameId + '&q=' + encodeURIComponent(q)).then(function (j) {
+          var d = document.createElement('div'); d.className = 'sh-ans';
+          d.textContent = 'Run ' + n + ': ' + (j.answer || j.error); box.appendChild(d); runs.push(j.answer || j.error); next();
+        }).catch(function () { $('shRun').disabled = false; status('Lost connection to the AI.'); });
+      })();
+    };
+    $('shLog').onclick = function () {
+      if (!runs.length) return status('Run the prompt first.');
+      var l = loadLog(); l.unshift({ prompt: $('shPrompt').value, boxes: $('shBoxes').value || '?', cans: $('shCans').value || '?', answers: runs.slice() });
+      try { localStorage.setItem(LOG, JSON.stringify(l.slice(0, 30))); } catch (e) { /* ok */ }
+      renderLog(); status('Saved to the log.');
+    };
+    renderLog();
+  })();
 
   CA.GKEYS.forEach(function (k) {
     $('g-' + k).onclick = function () {

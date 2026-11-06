@@ -178,7 +178,7 @@ main { display: block; }
   border-top: 1px solid var(--line-strong);
   padding: 8px var(--gutter) calc(8px + env(safe-area-inset-bottom, 0px));
 }
-.tabs { max-width: var(--col); margin: 0 auto; display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+.tabs { max-width: var(--col); margin: 0 auto; display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
 .tab {
   background: transparent; border: 0; border-radius: 14px;
   padding: 7px 4px; display: flex; flex-direction: column; align-items: center; gap: 2px;
@@ -510,3 +510,7 @@ main { display: block; }
   .hero-art { width: 120px; opacity: 0.6; }
   .chip-stat { padding: 5px 10px 5px 6px; }
 }
+
+.row-btns { display: flex; gap: 8px; flex-wrap: wrap; margin: 10px 0; }
+.sh-ans { margin: 8px 0; padding: 10px; border-radius: 10px; background: rgba(255,255,255,.06); white-space: pre-wrap; font-size: .9rem; }
+#tab-shelf textarea, #tab-shelf input { background: rgba(255,255,255,.08); color: inherit; border: 1px solid rgba(255,255,255,.2); border-radius: 8px; padding: 6px; font: inherit; }

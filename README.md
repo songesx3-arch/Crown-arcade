@@ -61,3 +61,7 @@ Server → client: `rematch_offer{mid,name,stake,game}`, `rematch_wait{mid}`, `r
 ## Known limits
 
 Plausibility-only anti-cheat; one server with JSON storage; guest + Google accounts only; three.js loads from cdnjs, so the 3D games need internet; free hosting tiers sleep and lose data without a persistent disk. Real-money play would need licensing, age and identity checks, payments and replay validation, none of which exist here.
+
+## Shelf Counter (camera + vision AI)
+
+The **Shelf** tab captures one photo from the classroom camera and asks a vision model to count items. The server proxies both services so the API key never reaches the browser. Env vars: `AI_API_KEY` (required, set it in Render, never commit it), and optional `CAMERA_URL`, `AI_URL`, `AI_MODEL` (defaults: camera.valleychristianai.com, ai.valleychristianai.com/v1, qwen3.8:27b). It is a tool page; no coins are involved.

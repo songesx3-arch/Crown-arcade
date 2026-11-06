@@ -752,6 +752,63 @@ function baseHeaders() {
   };
 }
 
+/* ------------------------------------------------------------------ Shelf Counter (camera + vision AI, proxied so the key stays on the server) */
+const CAMERA_URL = env('CAMERA_URL', 'https://camera.valleychristianai.com').replace(/\/+$/, '');
+const AI_URL = env('AI_URL', 'https://ai.valleychristianai.com/v1').replace(/\/+$/, '');
+const AI_MODEL = env('AI_MODEL', 'qwen3.8:27b');
+const AI_API_KEY = env('AI_API_KEY', '');
+const shelfFrames = new Map();            // id -> base64 jpeg (last 20)
+const shelfHits = new Map();              // ip -> [timestamps]
+function shelfLimited(ip) {
+  const now = Date.now(), a = (shelfHits.get(ip) || []).filter(function (t) { return now - t < 60000; });
+  a.push(now); shelfHits.set(ip, a);
+  if (shelfHits.size > 5000) shelfHits.clear();
+  return a.length > 20;
+}
+async function shelfApi(pathname, query, ip) {
+  if (shelfLimited(ip)) return { code: 429, json: { error: 'Slow down: try again in a minute.' } };
+  try {
+    if (pathname === '/api/shelf/health') {
+      const r = await fetch(CAMERA_URL + '/health', { signal: AbortSignal.timeout(15000) });
+      return { code: 200, json: await r.json() };
+    }
+    if (pathname === '/api/shelf/capture') {
+      const r = await fetch(CAMERA_URL + '/frame/base64', { signal: AbortSignal.timeout(30000) });
+      if (!r.ok) return { code: 502, json: { error: 'Camera returned ' + r.status + (r.status === 503 ? ' (still starting: wait 5 seconds and retry)' : '') } };
+      const j = await r.json();
+      if (!j || typeof j.image_b64 !== 'string') return { code: 502, json: { error: 'Camera reply had no image_b64.' } };
+      const id = crypto.randomBytes(6).toString('hex');
+      shelfFrames.set(id, j.image_b64);
+      while (shelfFrames.size > 20) shelfFrames.delete(shelfFrames.keys().next().value);
+      return { code: 200, json: { id: id, length: j.image_b64.length } };
+    }
+    if (pathname === '/api/shelf/ask') {
+      if (!AI_API_KEY) return { code: 503, json: { error: 'The AI key is not set on the server (env AI_API_KEY).' } };
+      const b64 = shelfFrames.get(String(query.get('id') || ''));
+      const q = String(query.get('q') || '').slice(0, 600);
+      if (!b64) return { code: 404, json: { error: 'That photo expired. Capture a new one.' } };
+      if (!q) return { code: 400, json: { error: 'Write a question first.' } };
+      const r = await fetch(AI_URL + '/chat/completions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + AI_API_KEY },
+        body: JSON.stringify({ model: AI_MODEL, messages: [{ role: 'user', content: [
+          { type: 'image_url', image_url: { url: 'data:image/jpeg;base64,' + b64 } },
+          { type: 'text', text: q }] }] }),
+        signal: AbortSignal.timeout(180000),
+      });
+      if (r.status === 401) return { code: 502, json: { error: '401: the AI key is missing or wrong.' } };
+      if (r.status === 404) return { code: 502, json: { error: '404: model name must be exactly ' + AI_MODEL } };
+      const j = await r.json();
+      const text = j && j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content;
+      if (!r.ok || typeof text !== 'string') return { code: 502, json: { error: 'The AI did not answer (' + r.status + ').' } };
+      return { code: 200, json: { answer: text } };
+    }
+  } catch (e) {
+    return { code: 502, json: { error: 'Could not reach it: ' + (e && e.name === 'TimeoutError' ? 'timed out' : 'connection error') } };
+  }
+  return { code: 404, json: { error: 'Not found' } };
+}
+
 const httpServer = http.createServer((req, res) => {
   const headers = baseHeaders();
   const reply = (code, type, body, extra) => {
@@ -763,6 +820,18 @@ const httpServer = http.createServer((req, res) => {
   let pathname;
   try { pathname = decodeURIComponent(new URL(req.url, 'http://x').pathname); } catch (e) { return reply(400, 'text/plain', 'Bad request'); }
 
+  if (pathname.startsWith('/api/shelf/')) {
+    const ip = (req.socket && req.socket.remoteAddress) || 'x';
+    const fm = /^\/api\/shelf\/image\/([a-f0-9]{12})\.jpg$/.exec(pathname);
+    if (fm) {
+      const b = shelfFrames.get(fm[1]);
+      return b ? reply(200, 'image/jpeg', Buffer.from(b, 'base64'), { 'Cache-Control': 'no-store' }) : reply(404, 'text/plain', 'Expired');
+    }
+    shelfApi(pathname, new URL(req.url, 'http://x').searchParams, ip).then(function (o) {
+      reply(o.code, 'application/json; charset=utf-8', JSON.stringify(o.json), { 'Cache-Control': 'no-store' });
+    });
+    return;
+  }
   const base = env('PUBLIC_URL', '').replace(/\/+$/, '');
   if (pathname === '/healthz') return reply(200, 'text/plain', 'ok');
   if (pathname === '/config.json') {
